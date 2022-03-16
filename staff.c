@@ -1,7 +1,7 @@
 #include<ctype.h>	// toupper()
 #include<stdbool.h>	// bool, false, true
 #include<stdio.h>	// fread(), fwrite(), printf(), scanf(), rewind(), getchar(), fseek(), ftell(), perror(), stdin, EOF, FILE, SEEK_END
-#include<stdlib.h>	// exit(), atoi(), malloc(), free()
+#include<stdlib.h>	// exit(), atoi(), malloc(), free(), memset()
 #include<string.h>	// strcpy(), strlen(), strcmp()
 
 
@@ -126,6 +126,7 @@ int staffDelete();
  * The inputted data will be truncated to the appropriate size to avoid buffer overflow.
  * This function makes the assumption that $buf is appropriately sized (>= to the size of corresponding field in Staff{}).
  * Any data truncated will not be notified and is up to the callee to show the user what was left of their input.
+ * stdin buffer will always be read to after the newline character so next scanf() read will not be required to rewind() first.
  * If EOF is received during the prompt, $buf is left in an incomplete state. (May contain invalid data)
  *
  * @param	buf	A pointer to the appropriately sized buffer.
@@ -223,79 +224,111 @@ int staffAdd() {
 		return 1;
 	}
 
-	char buf[MAX];
+	// Password max length is $MAX-1.
+	// scanf() will scan an additional character to determine if password exceeds intended size.
+	// So an additional character is allocated for password's null character.
+	char buf[MAX+1];
+	enum StaffModifiableFields curPrompt = SE_ID;
 
 	// Prompt ID
-	while(1) {
-		if(staffPromptDetails(buf, SE_ID) == EOF) {
-			return EOF;
+	// XXX: Iterate through enum by incrementing.
+	// Just in case SE_ID isn't starting from one or something. Minus by SE_ID
+	while(curPrompt++ < (STAFF_ENUM_LENGTH-SE_ID)) {
+		// Print entered details
+		if(curPrompt >= SE_ID) {
+			printf("Staff ID		: %s\n", newStaff.id);
 		}
-
-		Staff tmp;
-		bool exists = false;
-
-		rewind(staffFile);
-		while(fread(&tmp, sizeof(Staff), 1, staffFile) == 1) {
-			if(strcmp(tmp.id, buf) == 0) {
-				exists = true;
-			}
+		if(curPrompt >= SE_NAME) {
+			printf("Staff name		: %s\n", newStaff.details.name);
 		}
+		if(curPrompt >= SE_POSITION) {
+			printf("Staff position	: %s\n", newStaff.details.position);
+		}
+		if(curPrompt >= SE_PHONE) {
+			printf("Staff phone		: %s\n", newStaff.details.phone);
+		}
+		putchar('\n');
 
-		if(exists) {
-			printf("Staff with the same ID exixts!\n\n");
-		} else {
-			strcpy(newStaff.id, buf);
-			break;
+		switch(curPrompt) {
+			case SE_ID:
+				// Ensure the Staff ID entered is unique.
+				while(1) {
+					if(staffPromptDetails(buf, SE_ID) == EOF) {
+						return EOF;
+					}
+
+					Staff tmp;
+					bool exists = false;
+
+					while(fread(&tmp, sizeof(Staff), 1, staffFile) == 1) {
+						if(strcmp(tmp.id, buf) == 0) {
+							exists = true;
+							break;
+						}
+					}
+					rewind(staffFile);
+
+					if(exists) {
+						printf("Staff with the same ID exixts!\n\n");
+					} else {
+						strcpy(newStaff.id, buf);
+						break;
+					}
+				}
+				break;
+
+			case SE_NAME:
+				if(staffPromptDetails(buf, SE_NAME) == EOF) {
+					return EOF;
+				}
+				strcpy(newStaff.details.name, buf);
+				break;
+			case SE_POSITION:
+				if(staffPromptDetails(buf, SE_POSITION) == EOF) {
+					return EOF;
+				}
+				strcpy(newStaff.details.position, buf);
+				break;
+			case SE_PHONE:
+				if(staffPromptDetails(buf, SE_PHONE) == EOF) {
+					return EOF;
+				}
+				strcpy(newStaff.details.phone, buf);
+				break;
+			default:
+				printf("Unimplemented!\n");
 		}
 	}
-
-	// Prompt name
-	// TODO: tell user what was received since scanf auto truncates.
-	if(staffPromptDetails(buf, SE_NAME) == EOF) {
-		return EOF;
-	}
-	truncate();
-	strcpy(newStaff.details.name, buf);
-	
-
-	// Prompt position
-	// TODO: same as name
-	if(staffPromptDetails(buf, SE_POSITION) == EOF) {
-		return EOF;
-	}
-	truncate();
-	strcpy(newStaff.details.position, buf);
-
-	// Prompt phone number
-	// TODO: same as name
-	if(staffPromptDetails(buf, SE_PHONE) == EOF) {
-		return EOF;
-	}
-	truncate();
-	strcpy(newStaff.details.phone, buf);
-	
 
 	// Prompt password
 	while(1) {
-		// TODO: tell the user the limit is 127 chars.
 		// NOTE: Implemented independantly because password hash should not be modifiable.
-		printf("Password (E.g. Ky54asdf'_. dQw4w9WgXcQ): ");
+		printf("Password (E.g. Ky54asdf' _.dQw4w9WgXcQ) (Maximum 127 characters): ");
 		
-		if(scanf("%127[^\n]", buf) == EOF) {
+		// Scan an additional character to determine if user's password exceeds max length.
+		if(scanf("%128[^\n]", buf) == EOF) {
 			return EOF;
 		}
+		u64 hash1 = computeHash(buf);
+		memset(buf, 0, MAX); // Zero out buffer to erase sensitive data.
 		truncate();
 
-		u64 hash1 = computeHash(buf);
+		if(strlen(buf) == MAX) {
+			printf("Please enter a password that is shorter than 127 characters!\n");
+			pause();
+			continue;
+		}
 
 		printf("Re-enter password: ");
-
+		// Don't have to scan an additional character anymore.
 		if(scanf("%127[^\n]", buf) == EOF) {
 			return EOF;
 		}
+		u64 hash2 = computeHash(buf);
+		memset(buf, 0, MAX-1); // NULL is already zero, don't have to zero it again.
 		truncate();
 
-		if(hash1 == computeHash(buf)) {
+		if(hash1 == hash2) {
 			newStaff.passHash = hash1;
 			break;
 		} else {
@@ -343,12 +376,11 @@ int staffModify() {
 		if(staffPromptDetails(buf, SE_ID) == EOF) {
 			return EOF;
 		}
-		truncate();
 
 		// Search for matching records.
 		found = false;
 
-		while(fread(&s, sizeof(Staff), 1, staffFile) != 0) {
+		while(fread(&chosenStaff, sizeof(Staff), 1, staffFile) != 0) {
 			if(strcmp(chosenStaff.id, buf) == 0) {
 				found = true;
 				break;
@@ -442,7 +474,7 @@ int staffDelete() {
 
 int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 	char* promptMessage;
-	char format[] = "%    ";
+	char format[] = "%       "; // Adjust accordingly if required.
 	bool valid = false;
 
 	switch(selection) {
@@ -452,15 +484,15 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 			break;
 		case SE_NAME:
 			promptMessage = "Name (John Smith)";
-			strcpy(format+1, "127s");
+			strcpy(format+1, "127[^\n]");
 			break;
 		case SE_POSITION:
 			promptMessage = "Position (Administrator)";
-			strcpy(format+1, "31s");
+			strcpy(format+1, "31[^\n]");
 			break;
 		case SE_PHONE:
 			promptMessage = "Phone (0123456789)";
-			strcpy(format+1, "15s");
+			strcpy(format+1, "15[^\n]");
 			break;
 		default:
 			printf("An error occured! (Unimplemented)\n");
@@ -480,7 +512,6 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 		switch(selection) {
 			case SE_ID:
 				if(buf[0] == 's') {
-					// TODO: Should the system be case insensitive?
 					valid = false;
 
 					printf("Please ensure that the alphabet entered is in uppercase!\n");
@@ -502,23 +533,29 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 					}
 				}
 				break;
-			case SE_PHONE:
-				for(int i = 0; buf[i]; ++i) {
-					if(buf[i] == ' ') {
-						printf("Please avoid putting spaces!\n");
-						pause();
-						valid = false;
-					} else if(buf[i] == '-') {
+			case SE_PHONE: { // Interesting... https://stackoverflow.com/questions/2036819/compile-error-with-switch-expected-expression-before
+				int i = 0;
+				for(; buf[i]; ++i) {
+					if(buf[i] == '-') {
 						printf("Please avoid putting hyphens\n");
 						pause();
 						valid = false;
+						break;
 					} else if(buf[i] < '0' || buf[i] > '9') {
 						printf("The phone number should only contain numbers");
 						pause();
 						valid = false;
+						break;
 					}
 				}
+
+				if(valid && (i < 9 || i > 12)) {
+					printf("Please enter a valid phone number!\n");
+					pause();
+					valid = false;
+				}
 				break;
+			}
 			default:;
 				// Do nothing.
 		}
@@ -757,15 +794,11 @@ Staff staffLogin(void) {
 	);
 
 	while(1) {
-		printf("Staff ID: ");
-
 		// Any leftover characters after the 7th byte will be truncated.
-
 		if(staffPromptDetails(buf, SE_ID) == EOF) {
 			*((char*) &s) = -1;
 			return s;
 		}
-		truncate();
 
 		// Iterate through staff data and find the matching staff ID.
 		bool found = false;
@@ -789,9 +822,11 @@ Staff staffLogin(void) {
 					*((char*) &s) = -1;
 					return s;
 				}
+				u64 enteredPassHash = computeHash(buf);
+				memset(buf, 0, MAX); // Zero out sensitive data.
 				truncate();
 
-				if(computeHash(buf) == s.passHash) {
+				if(enteredPassHash == s.passHash) {
 					// A valid password is entered.
 					match = true;
 					break;

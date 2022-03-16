@@ -69,40 +69,54 @@ const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
 /**
  * @brief	Presents a screen to add more staff to the staff record.
  * 
- * @param	s	Staff struct of the logged in staff. Passed by pointer to reduce stack usage.
- *
  * @retval	0	Staff successfully added.
  * @retval	1	Staff failed to be added (File operation error).
- * @retval	2	Staff failed to be added (Current staff has insufficient permission).
- * @retval	3	Staff addition cancelled (Add operation was cancelled by user).
+ * @retval	2	Staff addition cancelled (Add operation was cancelled by user).
  * @retval	EOF	Staff addition cancelled (EOF signal received).
  */
-int staffAdd(Staff* s);
+int staffAdd();
 
 
 /**
  * @brief	Presents a screen to add more staff to the staff record.
  * 
- * @param	s	Staff struct of the logged in staff. Passed by pointer to reduce stack usage.
- *
  * @retval	0	Staff successfully added.
  * @retval	1	Staff failed to be added (Staff file cannot be opened).
- * @retval	2	Staff failed to be added (Current staff has insufficient permission).
- * @retval	3	Staff failed to be added (Add operation was cancelled by user).
+ * @retval	2	Staff failed to be added (Add operation was cancelled by user).
  */
-int staffSearch(Staff* s);
+int staffSearch();
 
 
-int staffModify(Staff* s);
+/**
+ * @brief	Select a staff to modify their details.
+ *
+ * @retval	0	Staff successfully modified.
+ * @retval	1	Staff failed to be modified (File operation error).
+ * @retval	2	Staff modification cancelled (Modify operation was cancelled by user).
+ * @retval	EOF	Staff modification cancelled (EOF signal received).
+ */
+int staffModify();
 
 
-int staffDisplay(Staff* s);
+/**
+ * @brief	Presents a screen with all the member details in a table format.
+ *
+ * @retval	0	Staffs details successfully displayed.
+ * @return		Non zero value indicating error.
+ */
+int staffDisplay();
 
 
-int staffReport(Staff* s);
+int staffReport();
 
-
-int staffDelete(Staff* s);
+/**
+ * @brief	Select staffs to delete.
+ *
+ * @retval	-1	Staff(s) deletion failed (An error occured).
+ * @retval	EOF	Staff(s) deletion aborted (EOF signal received).
+ * @return		Number of staffs deleted.
+ */
+int staffDelete();
 
 
 /**
@@ -131,9 +145,10 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection);
  * @param	printList		A enum list to print only the fields provided according to the order passed in.
  * @param	printListLen	Length of enum list.
  *
- * @retval	0	Print operation successful.
- * @retval	1	Print operation failed, file operation error.
- * @retval	2	Print operation failed, malloc() failed.
+ * @retval	0	Print operation successful (Quit normally).
+ * @retval	1	Print operation failed (File operation error).
+ * @retval	2	Print operation failed (malloc() failed).
+ * @retval	EOF	Print operation aborted (EOF signal received).
  */
 int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableFields* printList, int printListLen);
 
@@ -154,17 +169,23 @@ Staff staffLogin(void);
 
 
 /**
- * @brief	Mixing function defined by BLAKE2b.
+ * @brief	Hashes the inputted string (password) to a one-way BLAKE2 hash.
  *
- * @param	v	Pointer to $v array that contains hashes and IV constants.
- * @param	a	Defined index to take and mix.
- * @param	b	Defined index to take and mix.
- * @param	c	Defined index to take and mix.
- * @param	d	Defined index to take and mix.
- * @param	x	One of 4 bytes character from the 128 bytes message chunk chosen with SIGMA.
- * @param	y	One of 4 bytes character from the 128 bytes message chunk chosen with SIGMA.
+ * A BLAKE2 message digest hash function that takes in a message to produce a fixed sized hash.
+ * This implementation of the BLAKE2 hash is in accordance with the BLAKE2b algorithm, designed for 64 bits system.
+ * This implementation does not include keys.
+ * Salting isn't in the scope of this hashing function.
+ *
+ * Message inputted to this function is also limited to only (2**64)-1 bytes due to the reduced size of length variable.
+ * Any bytes after the null-terminated string will be ignored and will not affect the result of the hash.
+ *
+ * References:
+ * 	RFC 7693: https://datatracker.ietf.org/doc/html/rfc7693
+ *
+ * @param 	msg	A pointer to a char array to be hashed.
+ * @return		8 bytes hash of the string (password).
  */
-void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y);
+u64 computeHash(char* msg);
 
 
 /**
@@ -179,26 +200,21 @@ void BLAKE2bF(u64* hash, char* msg, u64 compressed, bool isLastBlock);
 
 
 /**
- * @brief	Hashes the inputted string (password) to a one-way BLAKE2 hash.
+ * @brief	Mixing function defined by BLAKE2b.
  *
- * A BLAKE2 message digest hash function that takes in a message to produce a fixed sized hash.
- * This implementation of the BLAKE2 hash is in accordance with the BLAKE2b algorithm, designed for 64 bits system.
- * This implementation does not include keys, nor salting the input.
- *
- * Message inputted to this function is also limited to only (2**64)-1 bytes due to the reduced size of length variable.
- * Any bytes after the null-terminated string will be ignored and will not affect the result of the hash.
- *
- * References:
- * 	RFC 7693: https://datatracker.ietf.org/doc/html/rfc7693
- *
- * @param 	msg	A pointer to a char array to be hashed.
- * @return		8 bytes hash of the string (password).
+ * @param	v	Pointer to $v array that contains hashes and IV constants.
+ * @param	a	Defined index to take and mix.
+ * @param	b	Defined index to take and mix.
+ * @param	c	Defined index to take and mix.
+ * @param	d	Defined index to take and mix.
+ * @param	x	One of 4 bytes character from the 128 bytes message chunk chosen with SIGMA.
+ * @param	y	One of 4 bytes character from the 128 bytes message chunk chosen with SIGMA.
  */
-u64 computeHash(char* msg);
+void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y);
 // ----- END OF HEADERS -----
 
 
-int staffAdd(Staff* s) {
+int staffAdd() {
 	Staff newStaff;
 	FILE* staffFile = fopen("staff.bin", "ab+");
 
@@ -303,13 +319,13 @@ int staffAdd(Staff* s) {
 }
 
 
-int staffSearch(Staff* s) {
+int staffSearch() {
 	// TODO: implement
 	return 0;
 }
 
 
-int staffModify(Staff* s) {
+int staffModify() {
 	FILE* staffFile = fopen("staff.bin", "rb+");
 	
 	if(staffFile == NULL) {
@@ -358,15 +374,15 @@ int staffModify(Staff* s) {
 }
 
 
-int staffDisplay(Staff* s) {
-	enum StaffModifiableFields fields[] = {SE_ID, SE_NAME, SE_POSITION};
+int staffDisplay() {
+	enum StaffModifiableFields fields[] = {SE_ID, SE_NAME, SE_POSITION, SE_PHONE};
 	staffDisplaySelected(NULL, ~0, fields, sizeof(fields)/sizeof(fields[0]));
 
 	return 0;
 }
 
 
-int staffDelete(Staff* s) {
+int staffDelete() {
 	FILE* staffFile = fopen("staff.bin", "r+");
 	// Will only be used if malloc() failed.
 	FILE* staffFileTmp;
@@ -803,19 +819,38 @@ Staff staffLogin(void) {
 }
 
 
-void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y) {
-	#define rotateRight64Bits(a,n) ((a)>>(n))^((a)<<(64-(n)))
+u64 computeHash(char* msg) {
+	// Define constants.
+	#define NN	8	// Hash size to be returned (bytes).
+	#define BB	128	// Block bytes.
 
-	v[a] += v[b] + x;
-	v[d] = rotateRight64Bits(v[d]^v[a], 32);
-	v[c] += v[d];
-	v[b] = rotateRight64Bits(v[b]^v[c], 24);
-	v[a] += v[b] + y;
-	v[d] = rotateRight64Bits(v[d]^v[a], 16);
-	v[c] += v[d];
-	v[b] = rotateRight64Bits(v[b]^v[c], 63);
+	// Initialisation vector constants from the BLAKE2 specification.
+	// Equivalent to the fractional part of the square root of the first 8 prime numbers.
+	u64 hash[] = {
+		0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+		0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
+	};
+	
+	hash[0] ^= 0x01010000 ^ NN;
 
-	#undef rotateRight64Bits
+	int len = strlen(msg);
+
+	// Split the message into $BB bytes each (and exclude the last block) and compress it.
+	for(int i = 0; i < (len+BB-1)/BB-1; ++i) {
+		BLAKE2bF(hash, &msg[i*BB], (i+1)*BB, false);
+	}
+
+	// Compress final block.
+	char buf[BB] = { 0 };
+	// NOTE: Any bytes beyond the null terminator will not be used.
+	memcpy(buf, &msg[len/BB*BB], len%BB);
+
+	BLAKE2bF(hash, buf, len, true);
+
+	#undef NN
+	#undef BB
+
+	return hash[0];
 }
 
 
@@ -876,38 +911,19 @@ void BLAKE2bF(u64* hash, char* msg, u64 bytesCompressed, bool isLastBlock) {
 }
 
 
-u64 computeHash(char* msg) {
-	// Define constants.
-	#define NN	8	// Hash size to be returned (bytes).
-	#define BB	128	// Block bytes.
+void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y) {
+	#define rotateRight64Bits(a,n) ((a)>>(n))^((a)<<(64-(n)))
 
-	// Initialisation vector constants from the BLAKE2 specification.
-	// Equivalent to the fractional part of the square root of the first 8 prime numbers.
-	u64 hash[] = {
-		0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
-		0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
-	};
-	
-	hash[0] ^= 0x01010000 ^ NN;
+	v[a] += v[b] + x;
+	v[d] = rotateRight64Bits(v[d]^v[a], 32);
+	v[c] += v[d];
+	v[b] = rotateRight64Bits(v[b]^v[c], 24);
+	v[a] += v[b] + y;
+	v[d] = rotateRight64Bits(v[d]^v[a], 16);
+	v[c] += v[d];
+	v[b] = rotateRight64Bits(v[b]^v[c], 63);
 
-	int len = strlen(msg);
-
-	// Split the message into $BB bytes each (and exclude the last block) and compress it.
-	for(int i = 0; i < (len+BB-1)/BB-1; ++i) {
-		BLAKE2bF(hash, &msg[i*BB], (i+1)*BB, false);
-	}
-
-	// Compress final block.
-	char buf[BB] = { 0 };
-	// NOTE: Any bytes beyond the null terminator will not be used.
-	memcpy(buf, &msg[len/BB*BB], len%BB);
-
-	BLAKE2bF(hash, buf, len, true);
-
-	#undef NN
-	#undef BB
-
-	return hash[0];
+	#undef rotateRight64Bits
 }
 
 
@@ -924,10 +940,10 @@ int main(void) {
 
 		switch(toupper(action)) {
 			case 'A':
-				staffAdd(&a);
+				staffAdd();
 				break;
 			case 'D':
-				staffDisplay(&a);
+				staffDisplay();
 				break;
 			case 'L':
 				staffLogin();

@@ -14,9 +14,9 @@ typedef unsigned long long u64;
 	----			------				-----------
 	ID				S000001				An unique ID assigned to the staff.
 	name			John Smith	 		Stores the name of the staff.
-	position		Administrator		A string that records the position of the staff, has no effect on what they can access.
+	position		Administrator		A string that records the position of the staff.
+	phone			0123456789			A string that stores the phone number of the staff. Defaults to MYS country code of +60
 	passwordHash	<64 bits binary>	A read-only hash of the staff's password.
-	permission		<32 bits binary>	A binary flag to determine which function the staff has access to. Go to $ACCESS for more.
 
 	NOTE: Modify $MAX as well if the largest buffer size is changed (current max, $name, is 128 bytes).
 */
@@ -24,32 +24,11 @@ typedef struct {
 	char id[8];
 	struct {
 		char name[128];
-		char position[64];
+		char position[32];
 		char phone[16];
 	} details;
 	u64 passHash;
-	int permission;
-	// 4 bytes padding here.
 } Staff;
-
-/*
-	TODO: What is shown on menu should be based on this.
-	ACCESS
-	======
-	If the nth bit of $Staff.permission is set, the corresponding staff will be able to access the function assigned.
-		0th bit		addStaff()
-		1st bit		searchStaff()
-		2nd bit		modifyStaff()
-		...
-*/
-const char* ACCESS[] = {
-	"addStaff",
-	"searchStaff",
-	"modifyStaff",
-	"displayStaff",
-	"reportStaff",
-	"deleteStaff"
-};
 
 
 /*
@@ -57,9 +36,9 @@ const char* ACCESS[] = {
 	This enum will be used in prompt() to determine which field is going to be modified.
 	
 	NOTE: The permission field must take the current logged in staff's permission field in consideration, and should be less than or equal to the current logged in staff.
-		  For more information, see the documentation available in the promptStaffDetails() function.
+		  For more information, see the documentation available in the staffPromptDetails() function.
 */
-enum StaffModifiableFields { SE_ID, SE_NAME, SE_POSITION, SE_PERMISSION };
+enum StaffModifiableFields { SE_ID, SE_NAME, SE_POSITION, SE_PHONE };
 const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
 
 
@@ -67,7 +46,7 @@ const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
 #define MAX 128
 
 // Define how many rows of records to display in displayStaff().
-#define ENTRIES_PER_PAGE 15
+#define ENTRIES_PER_PAGE 16
 
 // Define a small function to truncate remaining bytes in stdin.
 #define truncate() 													\
@@ -82,6 +61,7 @@ const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
 	do {										\
 		printf("Enter any key to proceed. ");	\
 		truncate();								\
+		putchar('\n');							\
 	} while(0)
 
 
@@ -133,14 +113,6 @@ int staffDelete(Staff* s);
  * This function makes the assumption that $buf is appropriately sized (>= to the size of corresponding field in Staff{}).
  * Any data truncated will not be notified and is up to the callee to show the user what was left of their input.
  * If EOF is received during the prompt, $buf is left in an incomplete state. (May contain invalid data)
- *
- * XXX: HACK:	An int* array pointer will be passed in through $buf if $selection is PERMISSION.
- * 				E.g.
- *
- * 				    int curPerm = 0;
- * 				    int newPerm = curPerm;
- *
- * 				    promptStaffDetails([&curPerm, &newPerm], PERMISSION);
  *
  * @param	buf	A pointer to the appropriately sized buffer.
  *
@@ -235,16 +207,11 @@ int staffAdd(Staff* s) {
 		return 1;
 	}
 
-	if((s->permission & 0x1) == 0) {
-		printf("Insufficient permission!\n");
-		return 2;
-	}
-
 	char buf[MAX];
 
 	// Prompt ID
 	while(1) {
-		if(promptStaffDetails(buf, ID) == EOF) {
+		if(staffPromptDetails(buf, SE_ID) == EOF) {
 			return EOF;
 		}
 
@@ -268,7 +235,7 @@ int staffAdd(Staff* s) {
 
 	// Prompt name
 	// TODO: tell user what was received since scanf auto truncates.
-	if(staffPromptDetails(buf, NAME) == EOF) {
+	if(staffPromptDetails(buf, SE_NAME) == EOF) {
 		return EOF;
 	}
 	truncate();
@@ -277,11 +244,19 @@ int staffAdd(Staff* s) {
 
 	// Prompt position
 	// TODO: same as name
-	if(staffPromptDetails(buf, POSITION) == EOF) {
+	if(staffPromptDetails(buf, SE_POSITION) == EOF) {
 		return EOF;
 	}
 	truncate();
 	strcpy(newStaff.details.position, buf);
+
+	// Prompt phone number
+	// TODO: same as name
+	if(staffPromptDetails(buf, SE_PHONE) == EOF) {
+		return EOF;
+	}
+	truncate();
+	strcpy(newStaff.details.phone, buf);
 	
 
 	// Prompt password
@@ -310,12 +285,6 @@ int staffAdd(Staff* s) {
 		} else {
 			printf("Passwords do not match!\n\n");
 		}
-	}
-
-	newStaff.permission = s->permission;
-
-	while(1) {
-		// TODO: wats tis
 	}
 
 	if(fwrite(&newStaff, sizeof(newStaff), 1, staffFile) == 0) {
@@ -348,11 +317,6 @@ int staffModify(Staff* s) {
 		return 1;
 	}
 
-	if(s->permission & 0x4) {
-		printf("Insufficient permission!\n");
-		return 2;
-	}
-
 	Staff chosenStaff;
 	char buf[MAX];
 	bool found = false;
@@ -360,7 +324,7 @@ int staffModify(Staff* s) {
 	int numModified = 0;
 	while(1) {
 		printf("Type a staff ID to modify their staff details or q to quit.");
-		if(promptStaffDetails(buf, ID) == EOF) {
+		if(staffPromptDetails(buf, SE_ID) == EOF) {
 			return EOF;
 		}
 		truncate();
@@ -383,6 +347,7 @@ int staffModify(Staff* s) {
 			pause();
 		}
 	}
+	// TODO: not implemented completely.
 
 
 	if(fclose(staffFile) != 0) {
@@ -394,53 +359,14 @@ int staffModify(Staff* s) {
 
 
 int staffDisplay(Staff* s) {
-	FILE* staffFile = fopen("staff.bin", "rb");
-
-	if(staffFile == NULL) {
-		perror("Error (Opening staff file)");
-		return 1;
-	}
-
-	if((s->permission & 0x8) == 0) {
-		printf("Insufficient permission!\n");
-		return 2;
-	}
-
-	// Get file size.
-	int res = fseek(staffFile, 0, SEEK_END);
-	int len = -1;
-	if(res == 0) {
-		// If fseek is successful, get file size.
-		len = ftell(staffFile);
-		len /= sizeof(Staff);
-		rewind(staffFile);
-	} else {
-		perror("Error (fseek to end)");
-	}
-
-	// Allocate memory to hold a page of record.
-	Staff* page = (Staff*) malloc(sizeof(Staff)*ENTRIES_PER_PAGE);
-	if(page == NULL) {
-		perror("Error (malloc)");
-	}
-
-	int curPage = 1;
-
-	while(1) {
-		printf(
-			"DISPLAY\n"
-			"-------\n"
-		);
-	}
-
-	free(page);
-	fclose(staffFile);
+	enum StaffModifiableFields fields[] = {SE_ID, SE_NAME, SE_POSITION};
+	staffDisplaySelected(NULL, ~0, fields, sizeof(fields)/sizeof(fields[0]));
 
 	return 0;
 }
 
 
-int staffDelete(Staff s) {
+int staffDelete(Staff* s) {
 	FILE* staffFile = fopen("staff.bin", "r+");
 	// Will only be used if malloc() failed.
 	FILE* staffFileTmp;
@@ -450,9 +376,8 @@ int staffDelete(Staff s) {
 		return 1;
 	}
 
-
 	int size = -1;
-	if(fseek(staff, 0, SEEK_END) != 0) {
+	if(fseek(staffFile, 0, SEEK_END) != 0) {
 		// fseek failed.
 		perror("Error (fseek failed) ");
 	} else {
@@ -461,8 +386,8 @@ int staffDelete(Staff s) {
 	}
 
 	Staff* staffArr;
-	int arrCapacity = len;
-	if(len == -1) {
+	int arrCapacity = size;
+	if(size == -1) {
 		// fseek failed. Set a default size for malloc().
 		// Allocate memory that can fit 1024 entries of Staff{}. (around 200KB)
 		arrCapacity = 1024;
@@ -473,14 +398,14 @@ int staffDelete(Staff s) {
 	if(staffArr == NULL) {
 		// malloc() failed.
 
-	} else if(len != -1) {
+	} else if(size != -1) {
 		// malloc() suceeded and fseek suceeded.
 		fread(staffArr, 1, size, staffFile);
 	} else {
 		// malloc() suceeded but fseek failed.
 		// Will have to extend malloc when needed.
 		int i = 0;
-		while(fread(staffArr+i, sizeof(Staff), 1, tmp) == 1) {
+		while(fread(staffArr+i, sizeof(Staff), 1, staffFile) == 1) {
 			if(++i > 1024) {
 				// TODO: Apply fix for realloc() fail.
 				arrCapacity *= 2;
@@ -488,7 +413,6 @@ int staffDelete(Staff s) {
 			}
 		}
 	}
-
 	
 	free(staffArr);
 
@@ -506,85 +430,21 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 	bool valid = false;
 
 	switch(selection) {
-		case ID:
+		case SE_ID:
 			promptMessage = "ID (S000001)";
 			strcpy(format+1, "7s");
 			break;
-		case NAME:
+		case SE_NAME:
 			promptMessage = "Name (John Smith)";
 			strcpy(format+1, "127s");
 			break;
-		case POSITION:
+		case SE_POSITION:
 			promptMessage = "Position (Administrator)";
-			strcpy(format+1, "63s");
+			strcpy(format+1, "31s");
 			break;
-		case PERMISSION:
-			// Special case.
-			/*	NOTE:	Resulting permission binary number should be less than or equal to current logged in user.
-						In other words, the current logged in user can't create a user that has permission they don't have.
-						The current user may only turn off access to functions and not on.
-
-						E.g. The logged in user with the following permission set.
-							Hi        Lo
-							0 0 0 0 1 1 = 3
-							May only create user with only one of these following permissions.
-							Hi        Lo		searchStaff()	addStaff()
-							0 0 0 0 1 1 = 3			/				/
-							0 0 0 0 1 0 = 2		   	/
-							0 0 0 0 0 1 = 1							/
-							0 0 0 0 0 0 = 0
-			*/
-
-			// XXX: An int array will be passed in so interpret it as int.
-			int* oldPerm = (int*) buf;
-			int* newPerm = (int*) (buf + sizeof(int));
-			char tmpBuf[2];
-			
-			while(1) {
-				printf("Access permission:\n");
-
-				// Calculate how many functions are there.
-				int numAccess = sizeof(ACCESS)/sizeof(ACCESS[0]);
-
-				// Print each function with their current bit state.
-				for(int i = 1; i <= numAccess; ++i) {
-					printf("%d.\t%-63s\t%s\n", i, ACCESS[i-1], *newPerm & (1<<(i-1)) ? "ON" : "OFF");
-				}
-				printf("Type one of the numbers to toggle the staff's access to it.\n");
-				printf("(Enter Q to quit)\n");
-
-				// Don't reprint if it's just a small mistake.
-				while(!valid) {
-					printf("Selection (E.g. 2): ");
-
-					if(scanf("%2s", tmpBuf) == EOF) {
-						return EOF;
-					}
-					truncate();
-
-					if(toupper(*tmpBuf) == 'Q') {
-						// Exit char inputted.
-						valid = true;
-						break;
-					}
-
-					int permSelection = atoi(tmpBuf);
-
-					if(permSelection == 0 && tmpBuf[0] != '0') {
-						printf("Please enter a valid number!\n");
-					} else if(permSelection-1 > numAccess) {
-						printf("Plese enter a number smaller than or equal to %d!\n", numAccess+1);
-					} else if(permSelection < 1) {
-						printf("Please enter a number larger than or equal to 1!\n");
-					} else if((*oldPerm & (1<<permSelection)) == 0) {
-						printf("Insufficient permission!\n");
-					} else {
-						*newPerm ^= 1<<(permSelection-1);
-						// Break out of the loop to print all of the codes again.
-						break;
-					}
-				}
-			}
+		case SE_PHONE:
+			promptMessage = "Phone (0123456789)";
+			strcpy(format+1, "15s");
 			break;
 		default:
 			printf("An error occured! (Unimplemented)\n");
@@ -592,8 +452,7 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 	};
 
 	while(!valid) {
-		printf("Enter staff's %s:", promptMessage);
-		#undef PROMPT_MSG
+		printf("Enter staff's %s: ", promptMessage);
 
 		if(scanf(format, buf) == EOF) {
 			return EOF;
@@ -603,7 +462,7 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 		// Validate or do nothing.
 		valid = true;
 		switch(selection) {
-			case ID:
+			case SE_ID:
 				if(buf[0] == 's') {
 					// TODO: Should the system be case insensitive?
 					valid = false;
@@ -618,7 +477,7 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 					break;
 				}
 
-				for(int i = 1; i <= 7; ++i) {
+				for(int i = 1; i < 7; ++i) {
 					if(buf[i] < '0' || buf[i] > '9') {
 						printf("Invalid Staff ID format!\n");
 						pause();
@@ -627,8 +486,25 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 					}
 				}
 				break;
-			default:
-				; // Do nothing.
+			case SE_PHONE:
+				for(int i = 0; buf[i]; ++i) {
+					if(buf[i] == ' ') {
+						printf("Please avoid putting spaces!\n");
+						pause();
+						valid = false;
+					} else if(buf[i] == '-') {
+						printf("Please avoid putting hyphens\n");
+						pause();
+						valid = false;
+					} else if(buf[i] < '0' || buf[i] > '9') {
+						printf("The phone number should only contain numbers");
+						pause();
+						valid = false;
+					}
+				}
+				break;
+			default:;
+				// Do nothing.
 		}
 	}
 
@@ -645,61 +521,113 @@ int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableField
 		return 1;
 	}
 
-	// Allocate memory to hold a page of record.
-	Staff* page = (Staff*) malloc(sizeof(Staff)*ENTRIES_PER_PAGE);
-	if(page == NULL) {
+	int len;
+	if(fseek(staffFile, 0, SEEK_END) != 0) {
+		perror("Error (fseek staff file)");
+		// TODO: Design a backup solution along with malloc().
+		return 1;
+	} else {
+		len = ftell(staffFile);
+		if(len == -1) {
+			// TODO: Design a backup solution.
+			perror("Error (ftell staff file)");
+			return 1;
+		}
+		len /= sizeof(Staff);
+		rewind(staffFile);
+	}
+
+	// Allocate memory to hold the whole file.
+	Staff* staffArr = (Staff*) malloc(len*sizeof(Staff));
+	if(staffArr == NULL) {
 		perror("Error (malloc)");
 		// Designing a backup solution really will do me die ah.
-		// TODO: Make a backup solution if malloc() fails.
+		// TODO: Maybe if got time, make a backup solution if malloc() fails.
 		return 2;
 	}
 
+	fread(staffArr, sizeof(Staff), len, staffFile);
+
+	// Traverse the file and mark first byte of name as 0 if should be excluded from print.
+	int total = 0;
+	for(int i = 0; i < len; ++i) {
+		for(int ii = 0; idListLen < 0 ? ii < ~idListLen : ii < idListLen; ++ii) {
+			// SAFETY:	idList[ii]'s address will be NULL if it was already used.
+			// 			Use ternary to match against an empty string if it is NULL.
+
+			/* PROOF:
+					idListLen >= 0	^ strcmp() == 0
+					false (exclude)	^ true  (matched)	= true  (ignore)
+					false (exclude)	^ false (unmatched)	= false (print)
+					true  (include)	^ true  (matched)	= false (print)
+					true  (include)	^ false (unmatched)	= true  (ignore)
+				Q.E.D.
+			*/
+			if((idListLen >= 0) ^ (strcmp(staffArr[i].id, idList[ii] ? idList[ii] : "") == 0)) {
+				staffArr[i].id[0] = 0;
+				if(idListLen >= 0) {
+					idList[ii] = NULL; // Set address to NULL since Staff ID is unique.
+				}
+			} else {
+				++total;
+				if(idListLen < 0) {
+					idList[ii] = NULL;
+				}
+			}
+		}
+	}
+	// Include all if did not traverse at all.
+	if(idListLen == 0 || ~idListLen == 0) {
+		total = len;
+	}
+
 	int curPage = 1;
+	// Stores each starting position of the page. Indexed with $curPage.
+	int* arrCursorHist = (int*) malloc(sizeof(int)*((len+(ENTRIES_PER_PAGE-1))/ENTRIES_PER_PAGE));
+	arrCursorHist[0] = 0;
+
+	int lastRead = 0;
+	int read = 0;
 
 	while(1) {
-		int read = 0;
-		read = fread(page, sizeof(Staff), ENTRIES_PER_PAGE, staffFile);
-
 		// ith index stores the width of dashes.
 		// i+1th index stores the width of the column (including the dashes).
 		short printWidth[STAFF_ENUM_LENGTH*2];
 		int printWidthLen = 0;
+		arrCursorHist[curPage] = arrCursorHist[curPage-1];
 
 		// Print headers.
+		printf("Number  "); // Column of the number of current row.
 		for(int i = 0; i < displayListLen; ++i) {
 			switch(displayList[i]) {
 				case SE_ID:
 					printf("Staff ID  ");
-					printWidth[i++] = 8;
-					printWidth[i++] = 10;
+					printWidth[printWidthLen++] = 8;
+					printWidth[printWidthLen++] = 10;
 					break;
 				case SE_NAME:
 					// Allocate a width of 52 cols for name.
 					// 2 of the cols are for cols seperator and the rest are for the name.
 					// If a name exceeds 47 characters (excluding null), ellipsis will be added.
 					printf("Name                                                ");
-					printWidth[i++] = 4;
-					printWidth[i++] = 52;
+					printWidth[printWidthLen++] = 4;
+					printWidth[printWidthLen++] = 52;
 					break;
 				case SE_POSITION:
 					printf("Position  ");
-					printWidth[i++] = 8;
-					printWidth[i++] = 30;
-					break;
-				case SE_PERMISSION:
-					printf("Access  ");
-					printWidthLen[i++] = 6;
-					printWidthLen[i++] = 20;
+					printWidth[printWidthLen++] = 8;
+					printWidth[printWidthLen++] = 33;
 					break;
 				default:
 					printf("?? ");
-					printWidthLen[i++] = 2;
-					printWidthLen[i++] = 2;
+					printWidth[printWidthLen++] = 2;
+					printWidth[printWidthLen++] = 2;
 			}
 		}
 		putchar('\n');
 
 		// Print header and content divider.
+		printf("------  "); // Divider for number column.
 		for(int i = 0; i < printWidthLen; i += 2) {
 			int ii = 0;
 			for(; ii < printWidth[i]; ++ii) {
@@ -711,62 +639,46 @@ int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableField
 		}
 		putchar('\n');
 
-		if(read == 0 && page == NULL) {
-			printf("No more records!\n");
-		else {
-			int numPrinted = 0;
-			int curPageCursor = 0;
+		// Print staff details from staffArray.
 
-			// Print staff details from $page.
-			// $read will be 0 if $page is NULL.
-			for(; page != NULL ? numPrinted < read : numPrinted < ENTRIES_PER_PAGE; ++numPrinted) {
-				Staff rowToPrint;
-				if(page != NULL) {
-					rowToPrint = &page[curPageCursor];
-				} else {
-					int res = fread(&rowToPrint, sizeof(Staff), 1, staffFile);
-					if(res != 1) {
-						// EOF or error. Assume it's EOF.
-						break;
-					}
-				}
-
-				for(int ii = 0; ii < displayListLen; ++ii) {
-					switch(displayList[ii]) {
-						case SE_ID:
-							printf("%s   ", rowToPrint.id);
-							break;
-						case SE_NAME:
-							printf("%-47s", rowToPrint.name);
-							if(strlen(rowToPrint.name) > 47) {
-								printf("...");
-							}
-							printf("     ");
-							break;
-						case SE_POSITION:
-							printf("%-27s", rowToPrint.position);
-							if(strlen(rowToPrint.position) > 27) {
-								printf("...");
-							}
-							printf("     ");
-							break;
-						case SE_PERMISSION:
-							// TODO
-							printf("Not implemented yet!  ");
-						default:
-							printf("??  ");
-					}
-				}
-				putchar('\n');
+		int* arrCursor = &arrCursorHist[curPage];
+		for(; read < lastRead+ENTRIES_PER_PAGE && read < total; ++*arrCursor) {
+			if(staffArr[*arrCursor].id[0] == 0) {
+				continue;
 			}
+			printf("%6d  ", ++read);
+
+			for(int i = 0; i < displayListLen; ++i) {
+				switch(displayList[i]) {
+					case SE_ID:
+						printf("%s   ", staffArr[*arrCursor].id);
+						break;
+					case SE_NAME:
+						printf("%-47s", staffArr[*arrCursor].details.name);
+						if(strlen(staffArr[*arrCursor].details.name) > 47) {
+							printf("...");
+						}
+						printf("     ");
+						break;
+					case SE_POSITION:
+						printf("%-31s", staffArr[*arrCursor].details.position);
+						printf("     ");
+						break;
+					default:
+						printf("??  ");
+				}
+			}
+			putchar('\n');
+		}
+		if(total == 0) {
+			printf("No matching entries!\n");
 		}
 
-		if(read <= 1) {
-			printf("\nDisplaying %d entry", read);
+		if(read-lastRead <= 1) {
+			printf("\nDisplaying %d entry", read-lastRead);
 		} else {
-			printf("\nDisplaying %d entries", read);
+			printf("\nDisplaying %d entries", read-lastRead);
 		}
-
 
 		if(len >= 0) {
 			printf(" of %d entr%s.", len, len < 2 ? "y" : "ies");		
@@ -782,32 +694,31 @@ int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableField
 		}
 		truncate();
 
-		// TODO: Don't allow user to forward or go backward if no more page.
 		if(toupper(action) == 'Q') {
 			break;
 		} else if(toupper(action) == 'B') {
-			// Rewind pointer to cur-1 page, current pointer is on cur+1 page.
-			int seekBackRes = fseek(staffFile, -sizeof(Staff)*(ENTRIES_PER_PAGE+read), SEEK_CUR);
-
-			if(seekBackRes != 0) {
-				perror("Error (fseek back 2 page) ");
-			} else {
+			if(curPage > 1) {
+				lastRead = lastRead < ENTRIES_PER_PAGE+(read-lastRead) ? 0 : lastRead-ENTRIES_PER_PAGE-(read-lastRead);
+				read = lastRead;
 				--curPage;
+			} else {
+				// Stay on the same page if on the 1st page.
+				read = lastRead;
 			}
 		} else {
-			// Do nothing since pointer is on the cur+1 page.
-			++curPage;
+			if(read == total) {
+				// Stay on the same page.
+				read = lastRead;
+			} else {
+				// Do nothing since pointer is on the cur+1 page.
+				lastRead = read;
+				++curPage;
+			}
 		}
 	}
 
-	free(page);
-	fclose(staffFile);
-
-	if(idListLen < 0) {
-	} else {
-
-	}
-
+	free(staffArr);
+	free(arrCursorHist);
 	fclose(staffFile);
 	return 0;
 }
@@ -834,7 +745,7 @@ Staff staffLogin(void) {
 
 		// Any leftover characters after the 7th byte will be truncated.
 
-		if(promptStaffDetails(buf, ID) == EOF) {
+		if(staffPromptDetails(buf, SE_ID) == EOF) {
 			*((char*) &s) = -1;
 			return s;
 		}
@@ -1001,7 +912,7 @@ u64 computeHash(char* msg) {
 
 
 int main(void) {
-	Staff a = {"S000000", {"ADMIN", "ADMIN"}, computeHash("ADMIN"), 0xFFFFFFFF};
+	Staff a = {"S000000", {"ADMIN", "ADMIN", "0123456789"}, computeHash("ADMIN")};
 	while(1) {
 		char action;
 
@@ -1013,15 +924,15 @@ int main(void) {
 
 		switch(toupper(action)) {
 			case 'A':
-				addStaff(&a);
+				staffAdd(&a);
 				break;
 			case 'D':
-				displayStaff(&a);
+				staffDisplay(&a);
 				break;
 			case 'L':
-				login();
+				staffLogin();
 				break;
-			default:
+			default:;
 				// nothing
 		}
 

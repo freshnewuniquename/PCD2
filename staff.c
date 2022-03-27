@@ -1,49 +1,26 @@
 #include<ctype.h>	// toupper()
-#include<stdbool.h>	// bool, false, true
-#include<stdio.h>	// fread(), fwrite(), printf(), scanf(), rewind(), getchar(), fseek(), ftell(), perror(), stdin, EOF, FILE, SEEK_END
-#include<stdlib.h>	// exit(), atoi(), malloc(), free(), memset()
-#include<string.h>	// strcpy(), strlen(), strcmp()
+#include<stdbool.h>	// bool, true, false
+#include<stdio.h>	// fread(), fseek(), ftell(), fwrite(), getchar(), perror(), printf(), rewind(), scanf(), ungetc(), EOF, FILE, SEEK_END, stdin
+#include<stdlib.h>	// atoi(), free(), malloc()
+#include<string.h>	// memset(), strcmp(), strcpy(), strlen()
+#include<time.h>	// localtime(), time(), time_t, struct tm
 
 
 typedef unsigned long long u64;
 
-/*
-	Data dictionary
-	===============
-	Name			Example				Description
-	----			------				-----------
-	ID				S000001				An unique ID assigned to the staff.
-	name			John Smith	 		Stores the name of the staff.
-	position		Administrator		A string that records the position of the staff.
-	phone			0123456789			A string that stores the phone number of the staff. Defaults to MYS country code of +60
-	passwordHash	<64 bits binary>	A read-only hash of the staff's password.
-
-	NOTE: Modify $MAX as well if the largest buffer size is changed (current max, $name, is 128 bytes).
-*/
-typedef struct {
-	char id[8];
-	struct {
-		char name[128];
-		char position[32];
-		char phone[16];
-	} details;
-	u64 passHash;
-} Staff;
-
 
 /*
-	This enum list all the modifable fields found in the Staff{}.
-	This enum will be used in prompt() to determine which field is going to be modified.
-	
-	NOTE: The permission field must take the current logged in staff's permission field in consideration, and should be less than or equal to the current logged in staff.
-		  For more information, see the documentation available in the staffPromptDetails() function.
+	This enum list all the modifiable fields found in the Staff{}.
+	This enum will be used in staffPromptDetails() to determine which field is going to be modified.
+
+	XXX: Maximum 127 enums if it's 1 byte. Sign bit is used for other purposes.
 */
 enum StaffModifiableFields { SE_ID, SE_NAME, SE_POSITION, SE_PHONE };
-const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
+#define STAFF_ENUM_LENGTH 4
 
 
 // Define maximum char array size needed for Staff struct elements buffer.
-#define MAX 128
+#define STAFF_BUF_MAX 128
 
 // Define how many rows of records to display in displayStaff().
 #define ENTRIES_PER_PAGE 16
@@ -64,59 +41,150 @@ const int STAFF_ENUM_LENGTH = sizeof(enum StaffModifiableFields)/sizeof(SE_ID);
 		putchar('\n');							\
 	} while(0)
 
+// Define whether or not to use clear screen function.
+#define ENABLE_CLS false
+
+#define HEADER ""
+
+// Define a small function to clear the screen.
+#define cls()						\
+	do {							\
+		if(ENABLE_CLS) {			\
+			system("clear || cls");	\
+		} else {					\
+			putchar('\n');			\
+			putchar('\n');			\
+			putchar('\n');			\
+		}							\
+		printf(HEADER);				\
+	} while(0)
+
+
+
+/*
+	Data dictionary
+	===============
+	Name			Example				Description
+	----			------				-----------
+	ID				S0001				An unique ID assigned to the staff.
+	name			John Smith			Stores the name of the staff.
+	position		Admin				A string that records the position of the staff.
+	phone			0123456789			A string that stores the phone number of the staff. Defaults to MYS country code of +60
+	passHash		<64 bits binary>	A read-only hash of the staff's password.
+
+	XXX:	passHash will be set to 0 if the staff was deleted.
+			Upon setting to 0, the first 32 bits will be used for date logging.
+			32 bits|8 bits|8 bits|16 bits (Big endian layout as an example)
+			zeroes  day    month  year
+
+	NOTE:	Modify $STAFF_BUF_MAX as well if the largest buffer size is changed (current max, $name, is 128 bytes).
+*/
+// TODO: maybe a salt that is produced with the answer of a security question and also maybe make a reset password thing.
+typedef struct {
+	char id[6];
+	struct {
+		char name[128];
+		char position[32];
+		char phone[16];
+	} details;
+	// 2 bytes padding.
+	u64 passHash;
+} Staff;
+
+
+// Instead of initialising this with the normal struct initialisation.
+// Get a copy of this from StaffDisplayOptionsInit(), filled with default values.
+// Then only modify the fields' value.
+typedef struct {
+	char* header;							// Message to pass in to retain printed contents if isInteractive is true.
+	char** idList;	 						// A char array that contains a 6 bytes string staff ID to include/exclude.
+	bool displayList[STAFF_ENUM_LENGTH];	// An bool array to determine which staff field to print.
+	int idListLen;							// Length of $idList.
+	int entriesPerPage;						// The number of entries to display per page.
+	int page;								// The currently opened page.
+	bool isInclude;							// Determine to only print the ID passed in or exclude them and print non-matching.
+	bool isInteractive;						// Whether to prompt the user for page navigation or not.
+	bool displayDeleted;					// Print deleted staff details or ignore it. 
+	bool displayExisting;					// Print deleted staff details or ignore it.
+	struct {								// A struct that contains the metadata of the current search. (Non-modifiable)
+		int totalBytes;						// Total bytes of the staff file.
+		int totalEntries;					// Total number of entries in the staff file.
+		int matchedLength;					// Total matched entries.
+	} metadata;
+	// No padding required yay.
+} StaffDisplayOptions;
+
 
 // ----- START OF HEADERS -----
+/*
+	Error codes:
+		> 0 	No error.
+		-1/EOF	EOF signal received.
+		-2		User aborted the operation.
+		-3		File/stdio error.
+		-4		Heap allocation/stdlib error
+		-15		Miscellaneous errors.
+*/
+
 /**
  * @brief	Presents a screen to add more staff to the staff record.
  * 
  * @retval	0	Staff successfully added.
- * @retval	1	Staff failed to be added (File operation error).
- * @retval	2	Staff addition cancelled (Add operation was cancelled by user).
  * @retval	EOF	Staff addition cancelled (EOF signal received).
+ * @retval	-2	Staff addition cancelled (Add operation was cancelled by user).
+ * @retval	-3	Staff failed to be added (File operation error).
  */
-int staffAdd();
+int staffAdd(void);
 
 
 /**
  * @brief	Presents a screen to add more staff to the staff record.
  * 
  * @retval	0	Staff successfully added.
- * @retval	1	Staff failed to be added (Staff file cannot be opened).
- * @retval	2	Staff failed to be added (Add operation was cancelled by user).
+ * @retval	EOF	Staff search cancelled (EOF signal received).
+ * @retval	-2	Staff search cancelled (Search operation was cancelled by user).
+ * @retval	-3	Staff search failed (File operation error).
  */
-int staffSearch();
+int staffSearch(void);
 
 
 /**
  * @brief	Select a staff to modify their details.
  *
  * @retval	0	Staff successfully modified.
- * @retval	1	Staff failed to be modified (File operation error).
- * @retval	2	Staff modification cancelled (Modify operation was cancelled by user).
  * @retval	EOF	Staff modification cancelled (EOF signal received).
+ * @retval	-2	Staff modification cancelled (Modify operation was cancelled by user).
+ * @retval	-3	Staff failed to be modified (File operation error).
  */
-int staffModify();
+int staffModify(void);
 
 
 /**
  * @brief	Presents a screen with all the member details in a table format.
  *
  * @retval	0	Staffs details successfully displayed.
- * @return		Non zero value indicating error.
+ * @return		Negative value indicating error. (See staffDisplaySelected() error codes)
  */
-int staffDisplay();
+int staffDisplay(void);
 
 
-int staffReport();
+/**
+ * @brief	Present a screen that show past employee with a brief summary.
+ *
+ * @retval	0	Staffs details successfully displayed and quit normally.
+ * @retval	EOF	Staff report opertion aborted (EOF received).
+ * @retval	-3	Staff failed to be displayed (File operation error).
+ */
+int staffReport(void);
 
 /**
  * @brief	Select staffs to delete.
  *
- * @retval	-1	Staff(s) deletion failed (An error occured).
- * @retval	EOF	Staff(s) deletion aborted (EOF signal received).
+ * @retval	EOF	Staff deletion failed (EOF signal received).
+ * @retval	-15	Staff deletion failed (An error occured).
  * @return		Number of staffs deleted.
  */
-int staffDelete();
+int staffDelete(void);
 
 
 /**
@@ -129,29 +197,52 @@ int staffDelete();
  * stdin buffer will always be read to after the newline character so next scanf() read will not be required to rewind() first.
  * If EOF is received during the prompt, $buf is left in an incomplete state. (May contain invalid data)
  *
- * @param	buf	A pointer to the appropriately sized buffer.
+ * @param	buf				A pointer to the appropriately sized buffer.
+ * @param	selection		An enum containing the field that is going to be validated. Bit flip of enum will disable prompt message.
+ * @param	specialStrings	A bool indicating whether to validate the data or not.
  *
- * @retval	EOF	EOF signal received, aborting prompt.
  * @retval	0	Read and validated successfully.
- * @retval	1	Unimplemented.
+ * @retval	EOF	EOF signal received, abort prompt.
+ * @retval	-2	Read but not validated (Exited with :q or :w).
+ * @retval	-15	Read but not validated (Not implemented).
  */
 int staffPromptDetails(char* buf, enum StaffModifiableFields selection);
 
 
 /**
- * @brief	Display the passed staff information in a nice table format.
- * 
- * @param	idList			A string array containing the list of staff to include/exclude in printing.
- * @param	idListLen		An integer that specify the length of $idList. If $idListLen is negative, number of staff to exclude is the unary of $idListLen (print staffs not included in $idList).
- * @param	printList		A enum list to print only the fields provided according to the order passed in.
- * @param	printListLen	Length of enum list.
+ * @brief	Returns a copy of a StaffDisplayOptions{} filled with the default values.
  *
- * @retval	0	Print operation successful (Quit normally).
- * @retval	1	Print operation failed (File operation error).
- * @retval	2	Print operation failed (malloc() failed).
- * @retval	EOF	Print operation aborted (EOF signal received).
+ * All modifiable fields are:					\n
+ * Parameter				Default				\n
+ * char* header;			(NULL)				\n
+ * char** idList;			(NULL)				\n
+ * bool displayList[$N];	(all set to false)	\n
+ * int idListLen;			(0)					\n
+ * int entriesPerPage;		($E)				\n
+ * int page;				(0)					\n
+ * bool isInclude;			(true)				\n
+ * bool isInteractive;		(true)				\n
+ * bool displayDeleted;		(false)				\n
+ * bool displayExisting;	(true)				\n
+ *
+ * $N = $STAFF_ENUM_LENGTH, $E = $ENTRIES_PER_PAGE
+ *
+ * @return	A struct with the default values filled.
  */
-int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableFields* printList, int printListLen);
+StaffDisplayOptions staffDisplayOptionsInit(void);
+
+
+/**
+ * @brief	Display the passed staff information in a nice table format.
+ *
+ * @param	displayOptions	A pointer to the display options for the staff data.
+ *
+ * @retval	EOF	Print operation aborted (EOF signal received).
+ * @retval	-3	Print operation failed (File operation error).
+ * @retval	-4	Print operation failed (Allcoation operation error).
+ * @return		Number of fields matched.
+ */
+int staffDisplaySelected(StaffDisplayOptions* options);
 
 
 /**
@@ -163,8 +254,8 @@ int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableField
  * If the inputted password is incorrect thrice, staff ID will be prompted again in case the staff ID was entered incorrectly.
  * A complete Staff struct with the corresponding staff details will be returned, after the staff has logged in.
  *
- * @return	First byte of struct is filled with -1 to indicate error.
- * @return	Logged in user's matching Staff struct.
+ * @return	First byte of ID is filled with 0 to indicate error, EOF for termination with EOF.
+ * @return	Logged in user's Staff struct.
  */
 Staff staffLogin(void);
 
@@ -212,108 +303,155 @@ void BLAKE2bF(u64* hash, char* msg, u64 compressed, bool isLastBlock);
  * @param	y	One of 4 bytes character from the 128 bytes message chunk chosen with SIGMA.
  */
 void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y);
-// ----- END OF HEADERS -----
 
 
-int staffAdd() {
+/**
+ * @brief	Searches the current stirng and return index of first occurence if there is a match.
+ *
+ * NOTE: This implementation is only limited to $STAFF_BUF_MAX-1 characters.
+ *
+ * @param	text	Text to be searched.
+ * @param	query	Query to search the text provided.
+ *
+ * @retval	-1	No match.
+ * @return		First index of the match.
+ */
+int KMPSearch(char* text, char* query);
+
+
+
+int staffAdd(void) {
+	int retval = 0;
+
 	Staff newStaff;
 	FILE* staffFile = fopen("staff.bin", "ab+");
 
 	if(staffFile == NULL) {
 		perror("Error (Opening staff file)");
-		return 1;
+		pause();
+		retval = -3;
+		goto CLEANUP;
 	}
 
-	// Password max length is $MAX-1.
+	// Password max length is $STAFF_BUF_MAX-1.
 	// scanf() will scan an additional character to determine if password exceeds intended size.
 	// So an additional character is allocated for password's null character.
-	char buf[MAX+1];
+	char buf[STAFF_BUF_MAX+1];
 	enum StaffModifiableFields curPrompt = SE_ID;
 
 	// Prompt ID
 	// XXX: Iterate through enum by incrementing.
-	// Just in case SE_ID isn't starting from one or something. Minus by SE_ID
-	while(curPrompt++ < (STAFF_ENUM_LENGTH-SE_ID)) {
-		// Print entered details
-		if(curPrompt >= SE_ID) {
-			printf("Staff ID		: %s\n", newStaff.id);
-		}
-		if(curPrompt >= SE_NAME) {
-			printf("Staff name		: %s\n", newStaff.details.name);
-		}
-		if(curPrompt >= SE_POSITION) {
-			printf("Staff position	: %s\n", newStaff.details.position);
-		}
-		if(curPrompt >= SE_PHONE) {
-			printf("Staff phone		: %s\n", newStaff.details.phone);
-		}
-		putchar('\n');
+	// XXX: Added one to print the last field after prompting it.
+	while(curPrompt < (STAFF_ENUM_LENGTH+1)) {
+		cls();
+		printf(
+			"ADD STAFF\n"
+			"=========\n"
+		);
 
+		// Print entered details after they have been filled.
+		if(curPrompt > SE_ID) {
+			printf("Staff ID       : %s\n", newStaff.id);
+		}
+		if(curPrompt > SE_NAME) {
+			printf("Staff name     : %s\n", newStaff.details.name);
+		}
+		if(curPrompt > SE_POSITION) {
+			printf("Staff position : %s\n", newStaff.details.position);
+		}
+		if(curPrompt > SE_PHONE) {
+			printf("Staff phone    : %s\n", newStaff.details.phone);
+		}
+
+		if(curPrompt > SE_ID) {
+			// Insert a line break to separate from the table.
+			putchar('\n');
+		}
+		printf("Enter :q to abort at any point.\n\n");
+
+		int res;
 		switch(curPrompt) {
 			case SE_ID:
+				res = staffPromptDetails(buf, SE_ID);
+				if(res == EOF) {
+					retval = EOF;
+					goto CLEANUP;
+				}
+				if(res != 0) {
+					break;
+				}
+
 				// Ensure the Staff ID entered is unique.
-				while(1) {
-					if(staffPromptDetails(buf, SE_ID) == EOF) {
-						return EOF;
-					}
+				Staff tmp;
+				bool exists = false;
 
-					Staff tmp;
-					bool exists = false;
-
-					while(fread(&tmp, sizeof(Staff), 1, staffFile) == 1) {
-						if(strcmp(tmp.id, buf) == 0) {
-							exists = true;
-							break;
-						}
-					}
-					rewind(staffFile);
-
-					if(exists) {
-						printf("Staff with the same ID exixts!\n\n");
-					} else {
-						strcpy(newStaff.id, buf);
+				while(fread(&tmp, sizeof(Staff), 1, staffFile) == 1) {
+					if(strcmp(tmp.id, buf) == 0 && (tmp.passHash & 0xFFFFFFFF00000000) != 0) {
+						exists = true;
 						break;
 					}
 				}
-				break;
+				rewind(staffFile);
 
-			case SE_NAME:
-				if(staffPromptDetails(buf, SE_NAME) == EOF) {
-					return EOF;
+				if(exists) {
+					printf("Staff with the same ID exists!\n\n");
+					pause();
+					res = -15;
+				} else {
+					strcpy(newStaff.id, buf);
 				}
-				strcpy(newStaff.details.name, buf);
+				break;
+			case SE_NAME:
+				res = staffPromptDetails(buf, SE_NAME);
+				if(res == 0) {
+					strcpy(newStaff.details.name, buf);
+				}
 				break;
 			case SE_POSITION:
-				if(staffPromptDetails(buf, SE_POSITION) == EOF) {
-					return EOF;
+				res = staffPromptDetails(buf, SE_POSITION);
+				if(res == 0) {
+					strcpy(newStaff.details.position, buf);
 				}
-				strcpy(newStaff.details.position, buf);
 				break;
 			case SE_PHONE:
-				if(staffPromptDetails(buf, SE_PHONE) == EOF) {
-					return EOF;
+				res = staffPromptDetails(buf, SE_PHONE);
+				if(res == 0) {
+					strcpy(newStaff.details.phone, buf);
 				}
-				strcpy(newStaff.details.phone, buf);
 				break;
-			default:
-				printf("Unimplemented!\n");
+			default:;
+				// Do nothing.
+		}
+
+		if(res == 0) {
+			++curPrompt;
+		} else if(res == -2) {
+			printf("Staff addition aborted!\n");
+			pause();
+			retval = -2;
+			goto CLEANUP;
+		} else if(res == EOF) {
+			retval = EOF;
+			goto CLEANUP;
 		}
 	}
 
 	// Prompt password
 	while(1) {
 		// NOTE: Implemented independantly because password hash should not be modifiable.
-		printf("Password (E.g. Ky54asdf' _.dQw4w9WgXcQ) (Maximum 127 characters): ");
+		printf("Password (E.g. Ky54asdf' _.dQw4w9WgXcQ): ");
 		
 		// Scan an additional character to determine if user's password exceeds max length.
 		if(scanf("%128[^\n]", buf) == EOF) {
-			return EOF;
+			retval = EOF;
+			goto CLEANUP;
 		}
 		u64 hash1 = computeHash(buf);
-		memset(buf, 0, MAX); // Zero out buffer to erase sensitive data.
+		int passLen = strlen(buf);
+		memset(buf, 0, STAFF_BUF_MAX); // Zero out buffer to erase sensitive data.
 		truncate();
 
-		if(strlen(buf) == MAX) {
+		if(passLen == STAFF_BUF_MAX) {
 			printf("Please enter a password that is shorter than 127 characters!\n");
 			pause();
 			continue;
@@ -322,10 +460,11 @@ int staffAdd() {
 		printf("Re-enter password: ");
 		// Don't have to scan an additional character anymore.
 		if(scanf("%127[^\n]", buf) == EOF) {
-			return EOF;
+			retval = EOF;
+			goto CLEANUP;
 		}
 		u64 hash2 = computeHash(buf);
-		memset(buf, 0, MAX-1); // NULL is already zero, don't have to zero it again.
+		memset(buf, 0, STAFF_BUF_MAX-1); // NULL is already zero, don't have to zero it again.
 		truncate();
 
 		if(hash1 == hash2) {
@@ -336,92 +475,560 @@ int staffAdd() {
 		}
 	}
 
+	printf("\nAre you sure you want to save the current staff detail? [Yn]: ");
+	if(scanf("%c", buf) == EOF) {
+		retval = EOF;
+		goto CLEANUP;
+	}
+	truncate();
+
+	if(toupper(*buf) == 'N') {
+		printf("\nStaff addition aborted!\n");
+		pause();
+		retval = -2;
+		goto CLEANUP;
+	}
+
 	if(fwrite(&newStaff, sizeof(newStaff), 1, staffFile) == 0) {
 		printf("An error occured while writing to file buffer!\n");
-		return 1;
+		pause();
+		retval = -3;
+		goto CLEANUP;
 	}
 
+CLEANUP:
 	if(fclose(staffFile) == EOF) {
 		perror("Error (Closing staff file) ");
-		return 1;
-	} else {
+		pause();
+		retval = -3;
+	} else if(retval == 0) {
 		printf("New staff details saved successfully!\n\n");
+		pause();
 	}
 
-	return 0;
+	return retval;
 }
 
 
-int staffSearch() {
-	// TODO: implement
-	return 0;
+int staffSearch(void) {
+	int retval = 0;
+	FILE* staffFile = fopen("staff.bin", "rb");
+	Staff* staffArr = NULL;
+	char* matches = NULL;
+	char** matchesPtr = NULL;
+
+	if(staffFile == NULL) {
+		perror("Error (Opening staff file)");
+		pause();
+		retval = 1;
+		goto CLEANUP;
+	}
+
+	// Read whole file to memory.
+	if(fseek(staffFile, 0, SEEK_END) != 0) {
+		perror("Error (fseek)");
+		pause();
+		retval = -3;
+		goto CLEANUP;
+	}
+
+	int len = ftell(staffFile);
+	rewind(staffFile);
+
+	if(len == -1L) {
+		perror("Error (ftell)");
+		pause();
+		retval = -3;
+		goto CLEANUP;
+	}
+
+	staffArr = malloc(len);
+
+	if(fread(staffArr, len, 1, staffFile) != 1) {
+		perror("Error (fread)");
+		pause();
+		retval = -3;
+		goto CLEANUP;
+	}
+	rewind(staffFile);
+
+	// Set up array to keep matches.
+	#define ID_SIZE 6
+
+	StaffDisplayOptions s = staffDisplayOptionsInit();
+
+	int curCapacity = 1024;
+	matches = malloc(ID_SIZE*1024);
+	matchesPtr = malloc(1024*sizeof(char*));
+
+	if(matches == NULL) {
+		perror("Error (malloc matches)");
+		pause();
+		retval = -4;
+		goto CLEANUP;
+	}
+	if(matchesPtr == NULL) {
+		perror("Error (malloc $matchesPtr)");
+		pause();
+		retval = -4;
+		goto CLEANUP;
+	}
+
+	int* matchesLen = &s.idListLen;
+
+	for(int i = 0; i < curCapacity; ++i) {
+		matchesPtr[i] = matches+i*6;
+	}
+
+	s.idList = matchesPtr;
+	s.displayList[SE_NAME] = true;
+	s.displayList[SE_ID] = true;
+	s.displayList[SE_POSITION] = true;
+	s.displayList[SE_PHONE] = true;
+	s.isInteractive = false;
+
+	char buf[STAFF_BUF_MAX];
+
+	// TODO: realloc matches when full.
+	while(1) {
+		cls();
+		printf(
+			"SEARCH STAFF\n"
+			"============\n"
+			"(Enter :q to quit.)\n"
+			"(Enter :h for help.)\n"
+		);
+		staffDisplaySelected(&s);
+
+		// TODO: add on to previous search.
+		//printf("([+]Field=Query): ");
+		printf("(Field=Query): ");
+		int res;
+		res = scanf("%127[^=\n]", buf);
+		getchar(); // Consume newline or equal character.
+		// truncate() not needed anymore.
+
+		if(res == EOF) {
+			retval = EOF;
+			goto CLEANUP;
+		}
+
+		// toupper $buf.
+		int i = 0;
+		while(buf[i]) {
+			buf[i] = toupper(buf[i]);
+			++i;
+		}
+
+		enum StaffModifiableFields field = -1;
+
+		if(buf[0] == ':') {
+			if(buf[1] == 'Q' || buf[1] == 'W') {
+				retval = -2;
+				goto CLEANUP;
+			} else if(buf[1] == 'H') {
+				cls();
+				printf(
+					"Help:\n"
+					"  Type in field name and search query to search.\n"
+					// TODO: feature to add on to previous search.
+					// "Precede the field name with a '+' sign to add on to the search result."
+					"  The search query may contain special characters such as:\n"
+					"    '%%' to match zero or more characters.\n"
+					"    '_' to match any character.\n\n"
+					"  Usage:\n"
+					"    $FIELD=$QUERY\n"
+					"  E.g.:\n"
+					"    Name=J%%\n"
+					"    (This searches for any name that starts with a capital 'J')\n"
+				);
+				pause();
+				continue;
+			}
+		} else if(strcmp(buf, "ID") == 0) {
+			field = SE_ID;
+		} else if(strcmp(buf, "NAME") == 0) {
+			field = SE_NAME;
+		} else if(strcmp(buf, "POSITION") == 0) {
+			field = SE_POSITION;
+		} else if(strcmp(buf, "PHONE") == 0) {
+			field = SE_PHONE;
+		} else {
+			printf("Entered field does not match any of the field!\n");
+			pause();
+			continue;
+		}
+
+		// Replace buffer again with search query.
+		if(scanf("%127[^\n]", buf) == EOF) {
+			retval = EOF;
+			goto CLEANUP;
+		}
+		truncate();
+
+		int wildCardlastIdx = -1;
+		for(int i = 0; i < (int) strlen(buf); ++i) {
+			if(buf[i] == '%') {
+				wildCardlastIdx = i;
+			}
+		}
+
+		// Will only enter here if a field is matched.
+		for(int i = 0; i < (int) (len/sizeof(Staff)); ++i) {
+			if((staffArr[i].passHash & 0xFFFFFFFF00000000) != 0) {
+				char* text;
+
+				switch(field) {
+					case SE_ID:
+						text = staffArr[i].id;
+						break;
+					case SE_NAME:
+						text = staffArr[i].details.name;
+						break;
+					case SE_POSITION:
+						text = staffArr[i].details.position;
+						break;
+					case SE_PHONE:
+						text = staffArr[i].details.phone;
+						break;
+					default:
+						retval = -15;
+						break;
+				}
+				int textLen = strlen(text);
+				int queryLen = strlen(buf);
+
+				int textOffset = 0;
+				int stringIdx = -1;
+				bool match = true;
+				// XXX: Temporarily replace null char with %
+				buf[queryLen] = '%';
+				for(int qIdx = 0; qIdx <= queryLen; ++qIdx) {
+					if((buf[qIdx] == '_' || buf[qIdx] == '%') && stringIdx != -1) {
+						printf("!=-1 offset: %d, sidx: %d, q: %d\n", textOffset, stringIdx, qIdx);
+						// pause();
+						// Extract string to search. (Was in extracting string mode)
+						// Temporarily replace special character with null terminator.
+						char c = buf[qIdx];
+						buf[qIdx] = 0;
+
+						int res;
+						if(qIdx == wildCardlastIdx) {
+							// Try to match the remaining length of the text to find a true match.
+							// Only possible characters here all will only take up 1 character space.
+							int textOffsetLocal = textOffset;
+							while(textOffsetLocal < textLen) {
+								res = KMPSearch(text+textOffsetLocal, buf+stringIdx);
+								if(res == -1 || textLen-res-textOffsetLocal == queryLen-qIdx) {
+									break;
+								} else {
+									textOffsetLocal += res+1;
+								}
+							}
+							textOffset = textOffsetLocal;
+						} else {
+							res = KMPSearch(text+textOffset, buf+stringIdx);
+						}
+						buf[qIdx] = c;
+
+						if(res == -1 || (res != 0 && (stringIdx == 0 || buf[stringIdx-1] == '_'))) {
+							match = false;
+							break;
+						}
+						textOffset += res+qIdx-stringIdx;
+						stringIdx = -1;
+					} else if(stringIdx == -1) {
+						printf("==-1 offset: %d, sidx: %d, q: %d\n", textOffset, stringIdx, qIdx);
+						// pause();
+						// Normal iteration.
+						if(buf[qIdx] == '_') {
+							++textOffset;
+						} else if(buf[qIdx] != '%') {
+							stringIdx = qIdx;
+						}
+					}
+
+					if(textOffset > textLen) {
+						match = false;
+						break;
+					}
+				}
+				buf[queryLen] = 0;
+				if(textOffset != textLen && buf[queryLen-1] != '%') {
+					match = false;
+				}
+
+				if(match) {
+					strcpy(matchesPtr[*matchesLen], staffArr[i].id);
+					++*matchesLen;
+				}
+			}
+		}
+	}
+
+CLEANUP:
+	#undef ID_SIZE
+	fclose(staffFile);
+	free(matches);
+	free(matchesPtr);
+	return retval;
 }
 
 
-int staffModify() {
+int staffModify(void) {
+	int retval = 0;
 	FILE* staffFile = fopen("staff.bin", "rb+");
 	
 	if(staffFile == NULL) {
 		perror("Error (Opening staff file)");
-		return 1;
+		retval = -3;
+		goto CLEANUP;
 	}
 
 	Staff chosenStaff;
-	char buf[MAX];
-	bool found = false;
+	
+	char buf[STAFF_BUF_MAX];
+	char id[6];
 
 	int numModified = 0;
 	while(1) {
-		printf("Type a staff ID to modify their staff details or q to quit.");
-		if(staffPromptDetails(buf, SE_ID) == EOF) {
-			return EOF;
+		cls();
+		printf(
+			"MODIFY STAFF\n"
+			"============\n"
+		);
+	
+		printf("Type a staff ID to modify their staff details or :q to quit.\n\n");
+		int res = staffPromptDetails(id, SE_ID);
+		if(res == EOF) {
+			retval = EOF;
+			goto CLEANUP;
+		}
+
+		if(res == -2) {
+			printf("Staff modification aborted!\n");
+			pause();
+			retval = -2;
+			goto CLEANUP;
 		}
 
 		// Search for matching records.
-		found = false;
-
+		bool found = false;
 		while(fread(&chosenStaff, sizeof(Staff), 1, staffFile) != 0) {
-			if(strcmp(chosenStaff.id, buf) == 0) {
+			if(strcmp(chosenStaff.id, id) == 0 && (chosenStaff.passHash & 0xFFFFFFFF00000000) != 0) {
 				found = true;
 				break;
 			}
 		}
+
+		int curFilePos = ftell(staffFile);
+		if(curFilePos == -1) {
+			perror("Error (ftell)");
+			retval = -3;
+			goto CLEANUP;
+		}
+		rewind(staffFile);
 		
 		if(found) {
-			// Break out of search loop.
-			break;
+			while(true) {
+				cls();
+				printf(
+					"MODIFY STAFF\n"
+					"============\n"
+					"(Enter :q to quit modification.)\n"
+					"(Enter :w to save modification.)\n"
+					"(Enter :h for help)\n\n"
+					"ID       : %s\n"
+					"Name     : %s\n"
+					"Position : %s\n"
+					"Phone    : %s\n\n"
+					"(Field=Value): ",
+					chosenStaff.id, chosenStaff.details.name, chosenStaff.details.position, chosenStaff.details.phone
+				);
+				scanf("%127[^=\n]", buf);
+				getchar(); // consume equal sign or newline.
+				// truncate() not needed anymore if newline.
+
+				// toupper() for string.
+				int i = 0;
+				while(buf[i]) {
+					buf[i] = toupper(buf[i]);
+					++i;
+				}
+
+				int res = 0;
+				if(strcmp(buf, "ID") == 0) {
+					res = staffPromptDetails(buf, ~SE_ID);
+					if(res == 0) {
+						bool exists = false;
+						while(fread(&chosenStaff, sizeof(Staff), 1, staffFile)) {
+							if((chosenStaff.passHash&0xFFFFFFFF00000000) != 0 && strcmp(chosenStaff.id, buf) == 0) {
+								exists = true;
+								break;
+							}
+						}
+						rewind(staffFile);
+
+						if(exists) {
+							printf("A staff with the same ID exists!\n");
+							pause();
+						} else {
+							strcpy(chosenStaff.id, buf);
+						}
+					}
+				} else if(strcmp(buf, "NAME") == 0) {
+					res = staffPromptDetails(buf, ~SE_NAME);
+					if(res == 0) {
+						strcpy(chosenStaff.details.name, buf);
+					}
+				} else if(strcmp(buf, "POSITION") == 0) {
+					res = staffPromptDetails(buf, ~SE_POSITION);
+					if(res == 0) {
+						strcpy(chosenStaff.details.position, buf);
+					}
+				} else if(strcmp(buf, "PHONE") == 0) {
+					res = staffPromptDetails(buf, ~SE_PHONE);
+					if(res == 0) {
+						strcpy(chosenStaff.details.phone, buf);
+					}
+				} else if(buf[0] == ':') {
+					// String is in uppercase.
+					if(buf[1] == 'Q') {
+						res = -2;
+					} else if(buf[1] == 'W') {
+						break;
+					} else if(buf[0] == 'H') {
+						cls();
+						printf(
+							"Help:\n"
+							"Type in field and value to replace to modify.\n"
+							"Usage:\n"
+							"\t$FIELD=$VALUE\n"
+							"E.g.:\n"
+							"\tName=John Smith\n\n"
+						);
+						pause();
+						continue;
+					}
+				} else {
+					printf("Entered field does not match any of the fields!\n");
+					pause();
+					continue;
+				}
+
+				if(res == EOF) {
+					retval = EOF;
+					goto CLEANUP;
+				} else if(res == -2) {
+					printf("Are you sure you want to abort? [yN]: ");
+					res = scanf("%1c", buf);
+					truncate();
+
+					if(res == EOF) {
+						retval = EOF;
+						goto CLEANUP;
+					} else if(buf[0] == 'Y') {
+						retval = -2;
+						goto CLEANUP;
+					}
+				}
+			}
+
+			printf("Are you sure you want to save this staff's details? [Yn]: ");
+			if(scanf("%1c", buf) == EOF) {
+				retval = EOF;
+			}
+			truncate();
+
+			if(toupper(buf[0]) == 'N') {
+				printf("Modify operation aborted!\n");
+				pause();
+				break;
+			} else {
+				// Go back one entry, since current pointer is at the end of the current Staff{}.
+				fseek(staffFile, curFilePos-sizeof(Staff), SEEK_SET);
+				fwrite(&chosenStaff, sizeof(Staff), 1, staffFile);
+				++numModified;
+				break;
+			}
 		} else {
 			printf("Staff ID entered does not match any records!\n");
 			pause();
 		}
 	}
-	// TODO: not implemented completely.
 
-
+CLEANUP:
+	#undef ID_SIZE
 	if(fclose(staffFile) != 0) {
 		perror("Error (Closing staff file)");
-		return 1;
+		return -3;
+	} else if(numModified != 0) {
+		printf("Staff data modified successfully!\n");
+		pause();
 	}
-	return 0;
+	return retval;
 }
 
 
-int staffDisplay() {
-	enum StaffModifiableFields fields[] = {SE_ID, SE_NAME, SE_POSITION, SE_PHONE};
-	staffDisplaySelected(NULL, ~0, fields, sizeof(fields)/sizeof(fields[0]));
+int staffDisplay(void) {
+	StaffDisplayOptions s = staffDisplayOptionsInit();
+	s.header = 
+		"DISPLAY STAFF\n"
+		"=============\n";
+	s.displayList[SE_ID] = true;
+	s.displayList[SE_NAME] = true;
+	s.displayList[SE_POSITION] = true;
+	s.displayList[SE_PHONE] = true;
+	s.isInclude = false;
 
-	return 0;
+	int res = staffDisplaySelected(&s);
+	return res < 0 ? res : 0;
 }
 
 
-int staffDelete() {
-	FILE* staffFile = fopen("staff.bin", "r+");
-	// Will only be used if malloc() failed.
-	FILE* staffFileTmp;
+int staffReport(void) {
+	int retval = 0;
+	FILE* staffFile = fopen("staff.bin", "rb");
+
+	if(staffFile == NULL) {
+		perror("Error (opening staff file)");
+		retval = -3;
+		goto CLEANUP;
+	}
+
+	StaffDisplayOptions s = staffDisplayOptionsInit();
+	s.header =
+		"REPORT STAFF\n"
+		"============\n";
+	s.displayList[SE_ID] = true;
+	s.displayList[SE_NAME] = true;
+	s.displayList[SE_POSITION] = true;
+	s.displayList[SE_PHONE] = true;
+	s.displayDeleted = true;
+	s.displayExisting = false;
+	s.isInclude = false;
+
+	int res = staffDisplaySelected(&s);
+	if(res < 0) {
+		retval = res;
+		goto CLEANUP;
+	}
+
+CLEANUP:
+	fclose(staffFile);
+	return retval;
+}
+
+
+int staffDelete(void) {
+	int retval = 0;
+	FILE* staffFile = fopen("staff.bin", "r+b");
+	Staff* staffArr = NULL;
 	
 	if(staffFile == NULL) {
 		perror("Error (Opening staff file)");
-		return 1;
+		retval = -3;
+		goto CLEANUP;
 	}
 
 	int size = -1;
@@ -433,7 +1040,6 @@ int staffDelete() {
 		rewind(staffFile);
 	}
 
-	Staff* staffArr;
 	int arrCapacity = size;
 	if(size == -1) {
 		// fseek failed. Set a default size for malloc().
@@ -441,53 +1047,243 @@ int staffDelete() {
 		arrCapacity = 1024;
 	}
 	// Try to load all of the Staff file data to memory so that a tmp file doesn't have to be created.
-	staffArr = (Staff*) malloc(arrCapacity*sizeof(Staff));
+	staffArr = malloc(arrCapacity*sizeof(Staff));
 
+	int len = 0;
 	if(staffArr == NULL) {
 		// malloc() failed.
-
+		// TODO: 
 	} else if(size != -1) {
 		// malloc() suceeded and fseek suceeded.
 		fread(staffArr, 1, size, staffFile);
+		len = size/sizeof(Staff);
 	} else {
 		// malloc() suceeded but fseek failed.
 		// Will have to extend malloc when needed.
-		int i = 0;
-		while(fread(staffArr+i, sizeof(Staff), 1, staffFile) == 1) {
-			if(++i > 1024) {
+		while(fread(staffArr+len, sizeof(Staff), 1, staffFile) == 1) {
+			if(++len > 1024) {
 				// TODO: Apply fix for realloc() fail.
 				arrCapacity *= 2;
 				staffArr = realloc(staffArr, arrCapacity);
 			}
 		}
 	}
+	rewind(staffFile);
+
+	// Limit delete amount.
+	// $ENTRIES_PER_PAGE to store user prompt.
+	// $ID_SIZE + 1 to store exclamation mark.
+	#define ID_SIZE 6
+	char deleteListData[ENTRIES_PER_PAGE+1][ID_SIZE+1];
+	// Create another array that contains the address of each string.
+	char* deleteList[ENTRIES_PER_PAGE];
+	for(int i = 0; i < ENTRIES_PER_PAGE; ++i) {
+		deleteList[i] = &deleteListData[i][0];
+	}
+
+
+	// Options for staff selected for delete.
+	StaffDisplayOptions delOpt = staffDisplayOptionsInit();
+	delOpt.idList = deleteList;
+	delOpt.displayList[SE_ID] = true;
+	delOpt.displayList[SE_NAME] = true;
+	delOpt.isInteractive = false;
+
+	int* listCursor = &delOpt.idListLen;
+
+	// Options for staffs remaining that have not been chosen for deletion.
+	StaffDisplayOptions disOpt = staffDisplayOptionsInit();
+	disOpt.idList = deleteList;
+	disOpt.displayList[SE_ID] = true;
+	disOpt.displayList[SE_NAME] = true;
+	disOpt.isInclude = false;
+	disOpt.isInteractive = false;
+
+	while(1) {
+		cls();
+		printf(
+			"DELETE STAFF\n"
+			"============\n"
+		);
+		printf("Enter h for help.\n");
+
+		if(*listCursor > 0) {
+			// Auto discard value if it's invalid or repeaated.
+			printf("Delete List\n");
+			*listCursor = staffDisplaySelected(&delOpt);
+			if(*listCursor == 0) {
+				// Reprint again since table is empty.
+				continue;
+			} else if(*listCursor < 0) {
+				retval = *listCursor;
+				goto CLEANUP;
+			}
+			putchar('\n');
+		}
+
+		printf(
+			"Employee List\n"
+			"-------------\n"
+		);
+
+		disOpt.idListLen = *listCursor;
+		int res = staffDisplaySelected(&disOpt);
+		if(res < 0) {
+			retval = res;
+			goto CLEANUP;
+		}
+
+		printf("Enter command: ");
+
+		res = scanf("%6s", deleteList[*listCursor]);
+		truncate();
+
+		if(res == EOF) {
+			retval = EOF;
+			goto CLEANUP;
+		}
+
+		if(toupper(deleteListData[*listCursor][0]) == 'W') {
+			break;
+		} else if(toupper(deleteListData[*listCursor][0]) == 'Q') {
+			retval = -2;
+			goto CLEANUP;
+		} else if(toupper(deleteListData[*listCursor][0]) == 'H') {
+			cls();
+			printf(
+				"HELP\n"
+				"====\n"
+				"Enter a staff's ID to put it into delete list.\n"
+				"Prefix a staff ID with an exclamation mark to remove it from delete list.\n"
+				"Actions:\n"
+				"\tS0001  (Insert to delete list)\n"
+				"\t!S0001 (Remove from delete list)\n"
+				"\tp        (Previous page)\n"
+				"\tn        (Next page)\n"
+				"\tw        (Proceed to delete)\n"
+				"\tq        (Abort delete)\n"
+			);
+			pause();
+			continue;
+		} else if(toupper(deleteListData[*listCursor][0]) == 'N') {
+			// Out of bounds error are handled inside displaySelectedStaff();
+			++disOpt.page;
+		} else if (toupper(deleteListData[*listCursor][0]) == 'P') {
+			// Out of bounds error are handled inside displaySelectedStaff();
+			--disOpt.page;
+		} else if(deleteList[*listCursor][0] == '!' && *listCursor > 0) {
+			int i = 0;
+			for(; i < *listCursor; ++i) {
+				if(strcmp(deleteList[i], &deleteList[*listCursor][1]) == 0) {
+					break;
+				}
+			}
+			if(i != *listCursor) {
+				// Matches.
+				if(i+1 != *listCursor) {
+					// Move (n-1)th staff to i.
+					// Only do it if there are data after i.
+					/* Demonstration:
+								i			n (cursor)
+						0	1	2	3	4	!2
+						(to remove 2, move 4 (n-1 th element) to 2.)
+								i			n
+						0	1	4	3	4	!2
+						(decrease cursor by one. to remove leftover and remove the remove command (!2).)
+								i		n
+						0	1	4	3	4	<uninit>
+						(original 4 will be overwritten next loop)
+
+						Q.E.D.
+					*/
+					memmove(deleteListData[i], deleteListData[*listCursor-1], ID_SIZE);
+				}
+				--*listCursor;
+			}
+			continue;
+		} else if(*listCursor == ENTRIES_PER_PAGE) {
+			printf(
+				"You have reached the maximum entries limit per deletion request!\n"
+				"To reduce the number of mistake that will occur, the deletion limit has been set to %d!\n", ENTRIES_PER_PAGE
+			);
+			pause();
+			continue;
+		}
+
+		++*listCursor;
+	}
+	retval = *listCursor;
 	
+	// Modify staff's $passHash to zero.
+	int acc = 0;
+	for(int i = 0; i < len; ++i) {
+		bool match = false;
+		for(int ii = 0; ii < *listCursor; ++ii) {
+			if((staffArr[i].passHash & 0xFFFFFFFF00000000) != 0  && strcmp(staffArr[i].id, deleteListData[ii]) == 0) {
+				match = true;
+				// Remove deleteListData[ii]. Staff ID is unique, so continue to next staff.
+				deleteListData[ii][0] = '\0';
+				break;
+			}
+		}
+
+		if(match) {
+			staffArr[i].passHash = 0;
+
+			time_t rawTime;
+			time(&rawTime);
+
+			struct tm* time = localtime(&rawTime);
+			staffArr[i].passHash |= (((short) time->tm_year)+1900) | (((char) time->tm_mon+1)<<16) | (((unsigned int) (char) time->tm_mday)<<24);
+
+			fseek(staffFile, sizeof(Staff)*acc, SEEK_CUR);
+			fwrite(&staffArr[i], sizeof(Staff), 1, staffFile);
+			acc = 0;
+		} else {
+			++acc;
+		}
+	}
+	if(*listCursor == 0) {
+		printf("No staff record deleted!\n");
+	} else if(*listCursor == 1) {
+		printf("1 staff record deleted!\n");
+	} else {
+		printf("%d staff records deleted!\n", *listCursor);
+	}
+	pause();
+
+CLEANUP:
+	#undef ID_SIZE
 	free(staffArr);
 
 	if(fclose(staffFile) == EOF) {
 		perror("Error (Closing staff file) ");
-		return 1;
+		retval = 1;
 	}
-	return 0;
+	return retval;
 }
 
 
 int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 	char* promptMessage;
-	char format[] = "%       "; // Adjust accordingly if required.
+	//                127[^N]
+	char format[] = "%       "; // XXX: Adjust accordingly if required.
 	bool valid = false;
+
+	bool isFlipped = false;
+	selection = (selection&(1<<(sizeof(selection)*8-1))) != 0 ? isFlipped=true, ~selection : selection;
 
 	switch(selection) {
 		case SE_ID:
-			promptMessage = "ID (S000001)";
-			strcpy(format+1, "7s");
+			promptMessage = "ID (S0001)";
+			strcpy(format+1, "5s");
 			break;
 		case SE_NAME:
 			promptMessage = "Name (John Smith)";
 			strcpy(format+1, "127[^\n]");
 			break;
 		case SE_POSITION:
-			promptMessage = "Position (Administrator)";
+			promptMessage = "Position (Admin)";
 			strcpy(format+1, "31[^\n]");
 			break;
 		case SE_PHONE:
@@ -495,39 +1291,47 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 			strcpy(format+1, "15[^\n]");
 			break;
 		default:
-			printf("An error occured! (Unimplemented)\n");
-			return 1;
+			printf("Error (Unimplemented)\n");
+			return -15;
 	};
 
 	while(!valid) {
-		printf("Enter staff's %s: ", promptMessage);
+		if(!isFlipped) {
+			printf("Staff's %s: ", promptMessage);
+		}
 
 		if(scanf(format, buf) == EOF) {
 			return EOF;
 		}
 		truncate();
 
-		// Validate or do nothing.
+		// Exit detection.
+		if(buf[0] == ':' && (toupper(buf[1]) == 'Q' || toupper(buf[1]) == 'W')) {
+			return -2;
+		}
+
 		valid = true;
+		if(buf[0] == 0) {
+			printf("Please enter a value!\n\n");
+			valid = false;
+		}
+
 		switch(selection) {
 			case SE_ID:
 				if(buf[0] == 's') {
 					valid = false;
 
-					printf("Please ensure that the alphabet entered is in uppercase!\n");
-					pause();
+					printf("Please ensure that the alphabet entered is in uppercase!\n\n");
 					break;
 				} else if(buf[0] != 'S') {
 					valid = false;
-					printf("Invalid Staff ID format!\n");
-					pause();
+					printf("Invalid Staff ID format!\n\n");
 					break;
 				}
 
-				for(int i = 1; i < 7; ++i) {
+				for(int i = 1; i < 5; ++i) {
 					if(buf[i] < '0' || buf[i] > '9') {
-						printf("Invalid Staff ID format!\n");
-						pause();
+						printf("Invalid Staff ID format!\n\n");
 						valid = false;
 						break;
 					}
@@ -537,21 +1341,18 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 				int i = 0;
 				for(; buf[i]; ++i) {
 					if(buf[i] == '-') {
-						printf("Please avoid putting hyphens\n");
-						pause();
+						printf("Please avoid putting hyphens\n\n");
 						valid = false;
 						break;
 					} else if(buf[i] < '0' || buf[i] > '9') {
-						printf("The phone number should only contain numbers");
-						pause();
+						printf("The phone number should only contain numbers\n\n");
 						valid = false;
 						break;
 					}
 				}
 
 				if(valid && (i < 9 || i > 12)) {
-					printf("Please enter a valid phone number!\n");
-					pause();
+					printf("Please enter a valid phone number!\n\n");
 					valid = false;
 				}
 				break;
@@ -566,238 +1367,383 @@ int staffPromptDetails(char* buf, enum StaffModifiableFields selection) {
 }
 
 
-int staffDisplaySelected(char** idList, int idListLen, enum StaffModifiableFields* displayList, int displayListLen) {
+StaffDisplayOptions staffDisplayOptionsInit(void) {
+	return (StaffDisplayOptions) {
+		NULL,
+		NULL,
+		{ 0, 0, 0, 0 },
+		0,
+		ENTRIES_PER_PAGE,
+		0,
+		true,
+		true,
+		false,
+		true,
+		{
+			0,
+			0,
+			0
+		}
+	};
+}
+
+
+int staffDisplaySelected(StaffDisplayOptions* options) {
+	int retval = 0;
 	FILE* staffFile = fopen("staff.bin", "r");
+	Staff* staffArr = NULL;
+	char* includeFlag = NULL;
+	int* arrCursorHist = NULL;
 
 	if(staffFile == NULL) {
 		perror("Error (Opening staff file)");
-		return 1;
+		pause();
+		retval = -3;
+		goto CLEANUP;
 	}
 
-	int len;
 	if(fseek(staffFile, 0, SEEK_END) != 0) {
 		perror("Error (fseek staff file)");
+		pause();
 		// TODO: Design a backup solution along with malloc().
-		return 1;
+		retval = -3;
+		goto CLEANUP;
 	} else {
-		len = ftell(staffFile);
+		int len = ftell(staffFile);
 		if(len == -1) {
 			// TODO: Design a backup solution.
 			perror("Error (ftell staff file)");
-			return 1;
+			pause();
+			retval = -3;
+			goto CLEANUP;
 		}
-		len /= sizeof(Staff);
 		rewind(staffFile);
+		options->metadata.totalBytes = len;
+		options->metadata.totalEntries = len / sizeof(Staff);
 	}
 
 	// Allocate memory to hold the whole file.
-	Staff* staffArr = (Staff*) malloc(len*sizeof(Staff));
+	staffArr = malloc(options->metadata.totalBytes*sizeof(Staff));
 	if(staffArr == NULL) {
 		perror("Error (malloc)");
+		pause();
 		// Designing a backup solution really will do me die ah.
-		// TODO: Maybe if got time, make a backup solution if malloc() fails.
-		return 2;
+		// TODO: Maybe if got time, remake a backup solution if malloc() fails.
+		retval = -4;
+		goto CLEANUP;
 	}
 
-	fread(staffArr, sizeof(Staff), len, staffFile);
+	fread(staffArr, sizeof(Staff), options->metadata.totalEntries, staffFile);
 
-	// Traverse the file and mark first byte of name as 0 if should be excluded from print.
-	int total = 0;
-	for(int i = 0; i < len; ++i) {
-		for(int ii = 0; idListLen < 0 ? ii < ~idListLen : ii < idListLen; ++ii) {
-			// SAFETY:	idList[ii]'s address will be NULL if it was already used.
-			// 			Use ternary to match against an empty string if it is NULL.
+	// If isInclude, set all flag to false, else true.
+	// Include: Set all to exclude then build up include list.
+	// Exclude: Set all to include then build up exclude list.
+ 	// A bitset to record which ID to print.
+	if(options->isInclude) {
+		includeFlag = calloc((options->metadata.totalEntries+7)/8, 1);
+	} else {
+		includeFlag = malloc((options->metadata.totalEntries+7)/8);
+		if(includeFlag != NULL) {
+			memset(includeFlag, ~0, (options->metadata.totalEntries+7)/8);
+		}
+	}
+	
+	if(includeFlag == NULL) {
+		perror("Error (malloc bitset)");
+		retval = -4;
+		goto CLEANUP;
+	}
 
-			/* PROOF:
-					idListLen >= 0	^ strcmp() == 0
-					false (exclude)	^ true  (matched)	= true  (ignore)
-					false (exclude)	^ false (unmatched)	= false (print)
-					true  (include)	^ true  (matched)	= false (print)
-					true  (include)	^ false (unmatched)	= true  (ignore)
+	// Traverse the file and mark ith bit of $includeFlag as 0/1 to determine if it should be included/excluded from print.
+	int total = 0; // Total number of matches (Will be printed).
+
+	for(int i = 0; i < options->metadata.totalEntries; ++i) {
+		if((staffArr[i].passHash & 0xFFFFFFFF00000000) == 0 ? !options->displayDeleted : !options->displayExisting) {
+			// Hide staff.
+			includeFlag[i/8] &= ~0 ^ (1 << (i%8));
+			continue;
+		}
+
+		for(int ii = 0; ii < options->idListLen; ++ii) {
+			/*	PROOF:
+					Exclude: build up exclude. (Initially all include)
+					Include: build up include. (Initially all exclude)
+
+						(Mode)			(Match include/exclude list)
+					isInclude		^ strcmp() != 0
+					false (exclude)	^ true  (unmatched)	= true  (set as include)
+					false (exclude)	^ false (matched)	= false (ignore)
+					true  (include)	^ true  (unmatched)	= false (set as exclude)
+					true  (include)	^ false (matched)	= true  (ignore)
 				Q.E.D.
 			*/
-			if((idListLen >= 0) ^ (strcmp(staffArr[i].id, idList[ii] ? idList[ii] : "") == 0)) {
-				staffArr[i].id[0] = 0;
-				if(idListLen >= 0) {
-					idList[ii] = NULL; // Set address to NULL since Staff ID is unique.
+			// if(options->isInclude ^ (strcmp(staffArr[i].id, options->idList[ii]) != 0)) {
+			if(strcmp(staffArr[i].id, options->idList[ii]) == 0) {
+				// If exclude mode, set bit as 0.
+				// If include mode, set bit as 1.
+				if(!options->isInclude) {
+					includeFlag[i/8] &= ~0 ^ (1 << (i%8));
+				} else {
+					includeFlag[i/8] |= (1 << (i%8));
+					break; // Marked as include, don't need to check against other IDs.
 				}
-			} else {
-				++total;
-				if(idListLen < 0) {
-					idList[ii] = NULL;
-				}
+			} else if(!options->isInclude) {
+				break;
 			}
 		}
 	}
-	// Include all if did not traverse at all.
-	if(idListLen == 0 || ~idListLen == 0) {
-		total = len;
+
+	for(int i = 0; i < options->metadata.totalEntries; ++i) {
+		if((includeFlag[i/8]&(1<<(i%8))) != 0) {
+			++total;
+		}
+	}
+	options->metadata.matchedLength = total;
+
+	if(options->page < 0) {
+		options->page = 0;
+	} else if(options->page * options->entriesPerPage > total) {
+		options->page = options->metadata.matchedLength/options->entriesPerPage;
 	}
 
-	int curPage = 1;
 	// Stores each starting position of the page. Indexed with $curPage.
-	int* arrCursorHist = (int*) malloc(sizeof(int)*((len+(ENTRIES_PER_PAGE-1))/ENTRIES_PER_PAGE));
+	// Plus one to include zeroth page.
+	arrCursorHist = malloc(sizeof(int*) * (1+(total+(options->entriesPerPage-1))/options->entriesPerPage));
 	arrCursorHist[0] = 0;
+	// XXX: Shift $arrCursorHist by 1 to make it a zero-based array.
+	++arrCursorHist;
 
 	int lastRead = 0;
 	int read = 0;
 
+	if(options->isInteractive) {
+		cls();
+	}
+
 	while(1) {
+		if(options->header != NULL) {
+			printf("%s", options->header);
+		}
 		// ith index stores the width of dashes.
 		// i+1th index stores the width of the column (including the dashes).
-		short printWidth[STAFF_ENUM_LENGTH*2];
-		int printWidthLen = 0;
-		arrCursorHist[curPage] = arrCursorHist[curPage-1];
+		short printWidth[STAFF_ENUM_LENGTH*2] = {
+			8, 8,
+			4, 50,
+			8, 31,
+			5, 12,
+		};
+		arrCursorHist[options->page] = arrCursorHist[options->page-1];
 
+		int cols = 0;
 		// Print headers.
 		printf("Number  "); // Column of the number of current row.
-		for(int i = 0; i < displayListLen; ++i) {
-			switch(displayList[i]) {
+		for(int i = 0; i < STAFF_ENUM_LENGTH; ++i) {
+			if(!options->displayList[i]) {
+				continue;
+			}
+			++cols;
+
+			switch(i) {
 				case SE_ID:
-					printf("Staff ID  ");
-					printWidth[printWidthLen++] = 8;
-					printWidth[printWidthLen++] = 10;
+					printf("STAFF ID");
 					break;
 				case SE_NAME:
-					// Allocate a width of 52 cols for name.
-					// 2 of the cols are for cols seperator and the rest are for the name.
+					// Allocate a width of 50 cols for name.
 					// If a name exceeds 47 characters (excluding null), ellipsis will be added.
-					printf("Name                                                ");
-					printWidth[printWidthLen++] = 4;
-					printWidth[printWidthLen++] = 52;
+					printf("%-50s", "NAME");
 					break;
 				case SE_POSITION:
-					printf("Position  ");
-					printWidth[printWidthLen++] = 8;
-					printWidth[printWidthLen++] = 33;
+					printf("%-31s", "POSITION");
 					break;
-				default:
-					printf("?? ");
-					printWidth[printWidthLen++] = 2;
-					printWidth[printWidthLen++] = 2;
+				case SE_PHONE:
+					printf("%-12s", "PHONE"); 
+					break;
+				default:;
+					// Do nothing.
 			}
+			printf("  ");
+		}
+		if(options->displayDeleted) {
+			printf("DELETED");
 		}
 		putchar('\n');
 
 		// Print header and content divider.
 		printf("------  "); // Divider for number column.
-		for(int i = 0; i < printWidthLen; i += 2) {
+		for(int i = 0; i < STAFF_ENUM_LENGTH*2; i += 2) {
+			if(!options->displayList[i/2]) {
+				continue;
+			}
+
 			int ii = 0;
 			for(; ii < printWidth[i]; ++ii) {
 				putchar('-');
 			}
-			for(; ii < printWidth[i+1]; ++ii) {
+			// Plus 2 for row divider.
+			for(; ii < printWidth[i+1]+2; ++ii) {
 				putchar(' ');
 			}
+		}
+		if(options->displayDeleted) {
+			printf("-------");
 		}
 		putchar('\n');
 
 		// Print staff details from staffArray.
-
-		int* arrCursor = &arrCursorHist[curPage];
-		for(; read < lastRead+ENTRIES_PER_PAGE && read < total; ++*arrCursor) {
-			if(staffArr[*arrCursor].id[0] == 0) {
+		int arrCursor = arrCursorHist[options->page];
+		for(; read < lastRead+options->entriesPerPage && read < total && arrCursor < options->metadata.totalEntries; ++arrCursor) {
+			if((includeFlag[arrCursor/8]&(1<<(arrCursor%8))) == 0) {
 				continue;
 			}
+			// Print column number.
 			printf("%6d  ", ++read);
 
-			for(int i = 0; i < displayListLen; ++i) {
-				switch(displayList[i]) {
+			for(int i = 0; i < STAFF_ENUM_LENGTH; ++i) {
+				if(!options->displayList[i]) {
+					continue;
+				}
+				switch(i) {
 					case SE_ID:
-						printf("%s   ", staffArr[*arrCursor].id);
+						printf("%s     ", staffArr[arrCursor].id);
 						break;
 					case SE_NAME:
-						printf("%-47s", staffArr[*arrCursor].details.name);
-						if(strlen(staffArr[*arrCursor].details.name) > 47) {
+						printf("%-47s", staffArr[arrCursor].details.name);
+						if(strlen(staffArr[arrCursor].details.name) > 47) {
 							printf("...");
 						}
 						printf("     ");
 						break;
 					case SE_POSITION:
-						printf("%-31s", staffArr[*arrCursor].details.position);
-						printf("     ");
+						printf("%-31s  ", staffArr[arrCursor].details.position);
 						break;
-					default:
-						printf("??  ");
+					case SE_PHONE:
+						printf("%-14s  ", staffArr[arrCursor].details.phone);
+						break;
+					default:;
+						// Do nothing.
+				}
+			}
+
+			if(options->displayDeleted) {
+				if((staffArr[arrCursor].passHash & 0xFFFFFFFF00000000) == 0) {
+					printf(
+						"%04llu-%02llu-%02llu",
+						staffArr[arrCursor].passHash&0xFFFF,
+						(staffArr[arrCursor].passHash&0xFF0000)>>16,
+						(staffArr[arrCursor].passHash&0xFF000000)>>24
+					);
+				} else {
+					printf("False");
 				}
 			}
 			putchar('\n');
 		}
+		// Print table border
+		for(int i = 1; i < STAFF_ENUM_LENGTH*2; i += 2) {
+			if(!options->displayList[i/2]) {
+				continue;
+			}
+			for(int ii = printWidth[i]+2; ii; --ii) {
+				putchar('-');
+			}
+		}
+		printf("--------"); // Number column.
+		if(options->displayDeleted) {
+			printf("---------");
+		}
+		putchar('\n');
+
 		if(total == 0) {
 			printf("No matching entries!\n");
 		}
 
 		if(read-lastRead <= 1) {
-			printf("\nDisplaying %d entry", read-lastRead);
+			printf("Displaying %d entry", read-lastRead);
 		} else {
-			printf("\nDisplaying %d entries", read-lastRead);
+			printf("Displaying %d entries", read-lastRead);
 		}
 
-		if(len >= 0) {
-			printf(" of %d entr%s.", len, len < 2 ? "y" : "ies");		
+		if(options->metadata.totalEntries >= 0) {
+			printf(" of %d entr%s.", total, total < 2 ? "y" : "ies");		
 		}
-		printf(" (Page %d)\n", curPage);
+		printf(" (Page %d)\n", options->page+1);
 
-		printf("Enter N for next page, B to go back, Q to quit (default=N): ");
+		if(options->isInteractive) {
+			printf("Enter N for next page, P to go to previous page, Q to quit (default=N): ");
+			char action;
 
-		char action;
+			if(scanf("%1c", &action) == EOF) {
+				retval = EOF;
+				goto CLEANUP;
+			}
+			truncate();
 
-		if(scanf("%1c", &action) == EOF) {
-			return EOF;
-		}
-		truncate();
-
-		if(toupper(action) == 'Q') {
+			if(toupper(action) == 'Q') {
+				break;
+			} else if(toupper(action) == 'P') {
+				if(options->page > 1) {
+					lastRead = lastRead < ENTRIES_PER_PAGE+(read-lastRead) ? 0 : lastRead-ENTRIES_PER_PAGE-(read-lastRead);
+					read = lastRead;
+					--options->page;
+				} else {
+					// Stay on the same page if on the 1st page.
+					read = lastRead;
+				}
+			} else {
+				if(read == total) {
+					// Stay on the same page.
+					read = lastRead;
+				} else {
+					// Do nothing since pointer is on the cur+1 page.
+					lastRead = read;
+					++options->page;
+				}
+			}
+			cls();
+		} else {
+			putchar('\n');
 			break;
-		} else if(toupper(action) == 'B') {
-			if(curPage > 1) {
-				lastRead = lastRead < ENTRIES_PER_PAGE+(read-lastRead) ? 0 : lastRead-ENTRIES_PER_PAGE-(read-lastRead);
-				read = lastRead;
-				--curPage;
-			} else {
-				// Stay on the same page if on the 1st page.
-				read = lastRead;
-			}
-		} else {
-			if(read == total) {
-				// Stay on the same page.
-				read = lastRead;
-			} else {
-				// Do nothing since pointer is on the cur+1 page.
-				lastRead = read;
-				++curPage;
-			}
 		}
 	}
+	retval = total;
 
+CLEANUP:
 	free(staffArr);
-	free(arrCursorHist);
+	free(includeFlag);
+	free(arrCursorHist-1);
 	fclose(staffFile);
-	return 0;
+	return retval;
 }
 
 
 Staff staffLogin(void) {
 	Staff s;
-	char buf[MAX];
+	char buf[STAFF_BUF_MAX];
 	FILE* staffFile = fopen("staff.bin", "rb");
 
 	if(staffFile == NULL) {
 		perror("Error (Opening staff file)");
-		*((char*) &s) = -1; // Write to the first byte this way just in case first field of the struct is changed in the future.
-		return s;
+		s.id[0] = 0;
+		goto CLEANUP;
 	}
 
-	printf(
-		"LOGIN\n"
-		"=====\n"
-	);
-
 	while(1) {
-		// Any leftover characters after the 7th byte will be truncated.
-		if(staffPromptDetails(buf, SE_ID) == EOF) {
-			*((char*) &s) = -1;
-			return s;
+		// Any leftover characters after the 5th byte will be truncated.
+		cls();
+		printf(
+			"LOGIN\n"
+			"=====\n"
+		);
+		int res = staffPromptDetails(buf, SE_ID);
+		if(res == EOF) {
+			s.id[0] = EOF;
+			goto CLEANUP;
+		}
+
+		if(res == -2) {
+			// Abort.
+			s.id[0] = 0;
+			goto CLEANUP;
 		}
 
 		// Iterate through staff data and find the matching staff ID.
@@ -819,11 +1765,11 @@ Staff staffLogin(void) {
 				printf("Password: ");
 
 				if(scanf("%127[^\n]", buf) == EOF) {
-					*((char*) &s) = -1;
-					return s;
+					s.id[0] = EOF;
+					goto CLEANUP;
 				}
 				u64 enteredPassHash = computeHash(buf);
-				memset(buf, 0, MAX); // Zero out sensitive data.
+				memset(buf, 0, STAFF_BUF_MAX); // Zero out sensitive data.
 				truncate();
 
 				if(enteredPassHash == s.passHash) {
@@ -837,20 +1783,108 @@ Staff staffLogin(void) {
 
 			if(match) {
 				// Password matches, break out of login loop.
+				printf("Logged in successfully.\n\n");
+				pause();
 				break;
 			} else {
 				printf("Password and staff ID does not match! Please try again!\n\n");
+				pause();
 			}
 		} else {
 			// Staff ID inputted not found in record, proceed to prompt again.
 			printf("Staff ID not found!\n\n");
+			pause();
 		}
 		
 	}
 
+CLEANUP:
 	fclose(staffFile);
 
 	return s;
+}
+
+
+// @retval	0	All good.
+// @retval	EOF EOF received.
+int staffMenu(void) {
+	Staff loggedInUser;
+	bool loggedIn = false;
+	while(1) {
+		cls();
+		// TODO: Maybe a welcome user or something.
+		// TODO: Make a better menu.
+		char action[2];
+		if(!loggedIn) {
+			loggedInUser = staffLogin();
+				
+			if(loggedInUser.id[0] == EOF) {
+				return EOF;
+			} if(loggedInUser.id[0] != 0) {
+				loggedIn = true;
+			}
+		} 
+		if(loggedIn) {
+			cls();
+			printf(
+				"STAFF MODULE\n"
+				"============\n"
+				"- Add\n"
+				"- Display\n"
+				"- Delete\n"
+				"- Modify\n"
+				"- Search\n"
+				"- Report\n\n"
+				"- Quit menu\n"
+				"- Log out\n\n"
+				"Enter a function: "
+			);
+		}
+
+		if(scanf("%2s", action) == EOF) {
+			truncate();
+			return EOF;
+		}
+		truncate();
+
+		if(loggedIn) {
+			switch(toupper(*action)) {
+				case 'A':
+					staffAdd();
+					break;
+				case 'D':
+					if(action[1] == '\0') {
+						printf("\nPlease enter one more character (DI[SPLAY] / DE[LETE]) to distinguish between 2 similar functions!\n");
+						pause();
+						continue;
+					}
+					if(toupper(action[1]) == 'I') {
+						staffDisplay();
+					} else {
+						staffDelete();
+					}
+					break;
+				case 'M':
+					staffModify();
+					break;
+				case 'S':
+					staffSearch();
+					break;
+				case 'R':
+					staffReport();
+					break;
+				case 'Q':
+					return 0;
+					// no break here because of return.
+				case 'L':
+					loggedIn = false;
+					break;
+				default:;
+					// nothing
+			}
+		}
+	}
+	return 0;
 }
 
 
@@ -881,6 +1915,7 @@ u64 computeHash(char* msg) {
 	memcpy(buf, &msg[len/BB*BB], len%BB);
 
 	BLAKE2bF(hash, buf, len, true);
+	memset(buf, 0, BB); // Erase sensitive data.
 
 	#undef NN
 	#undef BB
@@ -962,34 +1997,56 @@ void BLAKE2bG(u64* v, u64 a, u64 b, u64 c, u64 d, u64 x, u64 y) {
 }
 
 
-int main(void) {
-	Staff a = {"S000000", {"ADMIN", "ADMIN", "0123456789"}, computeHash("ADMIN")};
-	while(1) {
-		char action;
+int KMPSearch(char* text, char* query) {
+	int LPS[STAFF_BUF_MAX-1] = { 0 };
+	int textLen = strlen(text);
+	int queryLen = strlen(query);
 
-		printf("actions = add, display, login: ");
-		if(scanf("%1c", &action) == EOF) {
-			break;
+	// Build array.
+	for(int r = 1, l = 0; r < queryLen; ++r) {
+		if(query[r] == query[l]) {
+			LPS[r] = ++l;
+		} else {
+			l = 0;
 		}
-		truncate();
-
-		switch(toupper(action)) {
-			case 'A':
-				staffAdd();
-				break;
-			case 'D':
-				staffDisplay();
-				break;
-			case 'L':
-				staffLogin();
-				break;
-			default:;
-				// nothing
-		}
-
 	}
-	// FILE* file = fopen("staff.bin", "wb");
-	// fwrite(&a, sizeof(a), 1, file);
-	// fclose(file);
+
+	int qIdx = 0;
+	int i = 0;
+	while(i < textLen) {
+		if(qIdx == queryLen) {
+			return i-queryLen+1;
+		}
+
+		if(query[qIdx] == text[i]) {
+			++qIdx;
+			++i;
+		} else {
+			qIdx = LPS[qIdx-1];
+			if(qIdx == 0) {
+				++i;
+			}
+		}
+	}
+
+	return -1;
+}
+
+
+int main(void) {
+	Staff a = {"S0000", {"ADMIN", "ADMIN", "0123456789"}, computeHash("ADMIN")};
+	if(staffMenu() == EOF) {
+		FILE* file = fopen("staff.bin", "wb");
+		fwrite(&a, sizeof(a), 1, file);
+		fclose(file);
+	}
 	return 0;
 }
+
+#undef STAFF_ENUM_LENGTH
+#undef STAFF_BUF_MAX
+#undef ENTRIES_PER_PAGE
+#undef truncate
+#undef pause
+#undef ENABLE_CLS
+#undef cls
